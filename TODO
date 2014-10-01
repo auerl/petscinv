@@ -1,0 +1,27 @@
+@TODO
+
+- Some improvements to xdmf output needed:
+  It would be a bit better to uniquify the vertices in 
+  xdmf output, at the moment there are redundant points
+
+- Solution should be pssibly be saved...
+  as a 1 to 4 column file, might be quite useful as an 
+  additional option instead of separate files
+
+- Add numerous sanity checks!
+  Everything is somewhat unstable at the moment, add 
+  warnings etc, when parameters are chosen incorrectly   
+
+- Post-processing module needs to be extended!
+  Variance reduction for data subgroups, logarithmic
+  likeliehood, and normalized model roughness
+
+- Read models for synthetic tests as point clouds
+  and automatically project onto inversion grid,
+  and a routine computing checkerboard models
+
+- Module to compute resolution matrix
+
+- Compare solvers and their convergence
+
+- Variance reduction hypothesis tests

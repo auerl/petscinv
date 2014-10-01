@@ -1,0 +1,54 @@
+#!/bin/bash
+
+# Solves precomputed tomography matrices using our new petsc solver
+
+mpirun -n 12 ./petscinv \
+    -matrix_schedule 'schedule' \
+    -inparam_file 'inparam' \
+    -inversion_parameters 'vsh,vsv' \
+    -reference_model 'prem_ani' \
+    -number_of_layers 21 \
+    -equatorial_increment 5.0 \
+    -project_id 'Inv01' \
+    -output_format 'ascii' \
+    -solution_type 'normal' \
+    -ksp_rtol 0.0001 \
+    -ksp_atol 0.0001 \
+    -ksp_monitor \
+    -ksp_type gmres
+
+
+#
+#   SOME NOTES:
+#
+# * Be aware that the rtol=the relative convergence tolerance 
+#   (i.e. the relative decrease in the residual norm) value is
+#   set based on the experience that for tomographic linear
+#   systems nothing significantly changes beyond this criteria
+#   One may need to check whether this is really the case before
+#   defining a final model
+# 
+# * If you want to run a synthetic test just add the line
+#   -synthetic_model 'synth.pcn' \
+#
+# * In case of an adaptive grid add the command line arguments
+#   -grid_info 'grid/grid.info.rit.S.d' \
+#   -adaptive_grid \
+#
+# * You could think about playing around with the preconditioning
+#   -pc_type jacobi 
+#
+# * To use LSQR on the rectangular system just set 
+#   -type to 'lsqr' or 'rect'
+#
+# * To get some additional info on the matrix you invert add the flags
+#   -info -mat_view_info -log_summary 
+#
+# * For testing you can specify a maximum number of iterations
+#   -ksp_max_it 1000
+#  
+# * In the case of -type 'normal' please try different solvers
+#   as gmres, bicg, cg, symmlq, minres using -ksp_type *
+#
+
+
