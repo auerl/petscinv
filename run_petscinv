@@ -3,17 +3,15 @@
 # Solves precomputed tomography matrices using our new petsc solver
 
 mpirun -n 12 ./petscinv \
-    -matrix_schedule 'samples/schedule' \
+    -matrix_schedule 'samples/schedule_swbw' \
     -inparam_file 'samples/inparam' \
     -inversion_parameters 'vsh,vsv' \
     -reference_model 'prem_ani' \
     -number_of_layers 21 \
     -equatorial_increment 5.0 \
-    -project_id 'INV01' \
+    -project_id 'INV03' \
     -output_format 'ascii' \
     -solution_type 'normal' \
-    -ksp_rtol 0.0001 \
-    -ksp_atol 0.0001 \
     -ksp_monitor \
     -ksp_type gmres
 
@@ -35,6 +33,10 @@ mpirun -n 12 ./petscinv \
 #   -grid_info 'grid/grid.info.rit.S.d' \
 #   -adaptive_grid \
 #
+# * If you want to store grouped variance reductions for subsets
+#   of data, just append the following
+#   -grouped_varr \
+#
 # * You could think about playing around with the preconditioning
 #   -pc_type jacobi 
 #
@@ -46,6 +48,10 @@ mpirun -n 12 ./petscinv \
 #
 # * For testing you can specify a maximum number of iterations
 #   -ksp_max_it 1000
+#
+# * Alternatively you can release the convergence criteria with
+#   -ksp_rtol 0.0001 \
+#   -ksp_atol 0.0001 \
 #  
 # * In the case of -type 'normal' please try different solvers
 #   as gmres, bicg, cg, symmlq, minres using -ksp_type *
