@@ -26,6 +26,8 @@
         which will just take a b_adotx vector coming
         from somewhere and will spit out a variance 
         reduction. Storing it needs also to be general
+      * At the moment I have many buffers called
+        b_adotx,b_synth,b_gvarr... I may not need them
       * The same for roughness computations
 
 
