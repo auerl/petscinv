@@ -561,6 +561,7 @@
            PetscScalar,     allocatable :: dloop(:,:)
            PetscInt,        allocatable :: prealloc(:) 
            PetscScalar,     allocatable :: meta_info(:,:)
+           PetscInt,        allocatable :: fromto_info(:,:)
            character(500),  allocatable :: path_info(:,:)           
          contains
            procedure :: initialize_inversion
@@ -614,6 +615,8 @@
 
           allocate ( this%path_info( matmx, 4 ) )
           allocate ( this%meta_info( matmx, 4 ) )
+          allocate ( this%fromto_info( matmx, 2 ) )
+
           allocate ( this%dloop( 4, dmpmx ) )
 
           ! read damping and matrix schedules
@@ -892,7 +895,7 @@
              Vec          b_store   ! to store the rhs vector
              Vec          b_synth   ! synthetics rhs vector
              Vec          b_adotx   ! rhs vector for cummulative variance red
-             Vec          b_gvarr   ! rhs vector for grouped variance red
+             Vec          b_dummy   ! rhs vector for grouped variance red
              Vec          b_rough   ! synthetics rhs vector
              Vec          x_synth   ! synthetics model vector
              Vec          mask_dmp   ! masking the damping rows
@@ -908,6 +911,7 @@
              procedure :: initialize_matrix
              procedure :: read_submatrices
              procedure :: assemble_matrix
+             procedure :: assemble_vectors
              procedure :: apply_rdamp
              procedure :: apply_ddamp
              procedure :: apply_ndamp
@@ -986,7 +990,7 @@
             call VecCreateMPI ( PETSC_COMM_WORLD, PETSC_DECIDE, &
                                 insche%rows_total+ &
                                 insche%nrdamprows, &
-                                this%b_gvarr,ierr)
+                                this%b_dummy,ierr)
             call VecCreateMPI ( PETSC_COMM_WORLD, PETSC_DECIDE, &
                                 insche%rows_total+ &
                                 insche%nrdamprows, &
@@ -1573,6 +1577,8 @@
 
                close(10)
                close(20)
+               
+               insche%fromto_info(j,1) = this%row
 
                ! Second loop over measurements, insert row by row
                do i=1,int(insche%meta_info(j,4))
@@ -1638,6 +1644,9 @@
 
                end do
 
+               ! Submatrix 
+               insche%fromto_info(j,2) = this%row - 1
+
                call PetscPrintf(PETSC_COMM_WORLD,"MATRIX: Read submatrix "//&
                                  trim(insche%path_info(j,3))//"\n",ierr)
                !row_total = row_total + int(insche%meta_info(j,4))                    
@@ -1688,7 +1697,53 @@
             call VecAssemblyBegin ( this%mask_dat, ierr)
             call VecAssemblyEnd   ( this%mask_dat, ierr)
 
+            print*,"TEEEST"
+!            call VecAssemblyBegin ( this%mask_sub, ierr)
+!            call VecAssemblyEnd   ( this%mask_sub, ierr)
+            print*,"TEEEST2"
+
+
           end subroutine assemble_matrix
+    !========================================================
+
+
+    !========================================================
+    !
+    !   procedure to assemble all vectors
+    !
+          subroutine assemble_vectors(this)
+            
+            implicit none
+            class(matr) :: this
+
+            call VecAssemblyBegin ( this%b, ierr)
+            call VecAssemblyEnd   ( this%b, ierr)
+
+            call VecAssemblyBegin ( this%b_synth, ierr)
+            call VecAssemblyEnd   ( this%b_synth, ierr)
+
+            call VecAssemblyBegin ( this%b_adotx, ierr)
+            call VecAssemblyEnd   ( this%b_adotx, ierr)
+
+            call VecAssemblyBegin ( this%b_dummy, ierr)
+            call VecAssemblyEnd   ( this%b_dummy, ierr)
+
+            call VecAssemblyBegin ( this%b_rough, ierr)
+            call VecAssemblyEnd   ( this%b_rough, ierr)
+
+            call VecAssemblyBegin ( this%x_synth, ierr)
+            call VecAssemblyEnd   ( this%x_synth, ierr)
+
+            call VecAssemblyBegin ( this%mask_dmp, ierr)
+            call VecAssemblyEnd   ( this%mask_dmp, ierr)
+
+            call VecAssemblyBegin ( this%mask_dat, ierr)
+            call VecAssemblyEnd   ( this%mask_dat, ierr)
+
+            call VecAssemblyBegin ( this%mask_sub, ierr)
+            call VecAssemblyEnd   ( this%mask_sub, ierr)
+
+          end subroutine assemble_vectors
     !========================================================
 
 
@@ -2275,6 +2330,7 @@
              PetscScalar, allocatable :: norm_rms(:)
              PetscScalar, allocatable :: norm_abs(:)
              PetscScalar, allocatable :: varr_cumm(:)
+             PetscScalar, allocatable :: varr(:,:)
              PetscInt,    allocatable :: its(:)
 
              ! for xdmf output
@@ -2300,12 +2356,12 @@
              procedure, pass :: compute_norm
              procedure, pass :: compute_rough
              procedure, pass :: compute_cvarr
-             procedure, pass :: compute_gvarr
+             procedure, pass :: compute_varr
              procedure, nopass :: sph2cart
              procedure, nopass :: dump_model_ascii
              procedure, pass :: dump_model_xdmf
              procedure, pass :: dump_run_info
-
+             procedure, pass :: dump_varr
 
           end type post
 
@@ -2373,6 +2429,7 @@
                allocate ( this%rough_abs(insche%loop_total) )
                allocate ( this%rough_nrm(insche%loop_total) )
                allocate ( this%varr_cumm(insche%loop_total) )
+               allocate ( this%varr(insche%mats_total,insche%loop_total) )
 
 
                ! ! Once recompute the roughness damping operator but with uniform weights
@@ -2756,6 +2813,12 @@
                        "POSTPROC: Unknown format, quitting!\n",ierr)
                   stop
                end select
+
+               if (inopts%gvarr) then
+                  ident=trim(ident_base)//'_varr.dat'
+                  call this%dump_varr(insche,ident,irun)
+               end if
+               
             end if
           
           end subroutine export_solution
@@ -2787,6 +2850,30 @@
           end subroutine dump_run_info
     !========================================================
 
+    !========================================================
+    !   
+    !  dumps solution in a simple ascii format
+    !                
+          subroutine dump_varr(this,insche,ident,irun)
+
+            implicit none           
+            class(post) :: this 
+            class(sche) :: insche
+
+            character(len=*), intent(in) :: ident
+            PetscInt, intent(in) :: irun
+            PetscInt imat,stat
+            
+            open(70,file="./results/"//trim(ident),iostat=stat)
+            do imat=1,insche%mats_total
+               write(70,"(1x,i8,i8,i8,2e15.7)") &
+                    imat,insche%fromto_info(imat,1),insche%fromto_info(imat,2),&
+                    this%varr(imat,irun)
+            end do
+            close(70)
+          
+          end subroutine dump_varr
+    !========================================================
 
 
     !========================================================
@@ -3057,25 +3144,19 @@
             PetscInt irun
 
             call PetscPrintf(PETSC_COMM_WORLD,"    computing model roughness!\n",ierr)
-            call VecPointwiseMult(inmatr%b_rough,inmatr%b_rough,inmatr%b_rough,ierr)
-            call VecSum(inmatr%b_rough,this%rough_abs(irun),ierr)
+
+            call VecDot(inmatr%b_rough,inmatr%b_rough,this%rough_abs(irun),ierr)
             this%rough_nrm(irun)=this%rough_abs(irun)/&
                  this%norm_abs(irun)
-                        
-            ! ! @ TODO: I am not sure why I am doing this only on proc 0
-            ! if (inmatr%processor == 0) then
-            !    call MatMult(this%D0,this%xout,this%rough,ierr)
-            !    call VecSum(this%rough,this%rough_abs(irun),ierr)
-            !    this%rough_nrm(irun)=this%rough_abs(irun)/&
-            !         this%norm_abs(irun)
-            !    if ( verbosity > 1 ) print*,"Roughness: ",this%rough_abs(irun)
-            ! end if
 
           end subroutine compute_rough
     !========================================================
 
 
     !========================================================
+    !
+    !  @ THIS ROUTINE IS OBSOLETE AND CAN BE REMOVED
+    !  
           subroutine compute_cvarr(this,inmatr,irun)
 
             implicit none
@@ -3118,41 +3199,47 @@
 
 
     !========================================================
-          subroutine compute_gvarr(this,inmatr,b_adotx_in,varr_cumm)
+          subroutine compute_varr(this,inmatr,insche,row_from,row_to,varr_cumm)
 
             implicit none
             class(post) :: this
             class(matr) :: inmatr
+            class(sche) :: insche
 
-            Vec, intent(inout) :: b_adotx_in
+            PetscInt, intent(in) :: row_from
+            PetscInt, intent(in) :: row_to
+
             PetscScalar, intent(out) :: varr_cumm
 
-            Vec b
-            Vec b_sqr                        
-            Vec b_adotx_min
-            Vec b_adotx_min_sqr            
-
             PetscScalar sum_b_sqr
-            PetscScalar sum_b_adotx_min_sqr
+            PetscScalar sum_b_min_b_adotx_sqr
 
-            call VecDuplicate(inmatr%b,b_sqr,ierr)
-            call VecDuplicate(inmatr%b,b,ierr)
-            call VecCopy(inmatr%b,b,ierr)
-
-            call VecPointwiseMult(b_sqr,inmatr%b,inmatr%b,ierr)
-            call VecSum(b_sqr,sum_b_sqr,ierr)
-              
-            call VecDuplicate(b_adotx_in,b_adotx_min,ierr)
-            call VecDuplicate(b_adotx_in,b_adotx_min_sqr,ierr)
-            call VecCopy(b_adotx_in,b_adotx_min,ierr)
-
-            call VecAXPY(b,-1.d0,b_adotx_min,ierr)
-            call VecPointwiseMult(b_adotx_min_sqr,b_adotx_min,b_adotx_min,ierr)
-            call VecSum(b_adotx_min_sqr,sum_b_adotx_min_sqr,ierr)
-
-            varr_cumm = 1.d0 - (sum_b_sqr/sum_b_adotx_min_sqr)            
+            PetscInt j
             
-          end subroutine compute_gvarr
+            ! Define mask vector
+            if ( inmatr%processor == 0 ) then
+               do j=1,insche%rows_total+ &
+                      insche%nrdamprows
+                  ! Initialize mask vector with zeros
+                  call VecSetValue(inmatr%mask_sub,j-1,0.d0,INSERT_VALUES,ierr)
+               end do
+               do j=row_from,row_to
+                  ! Set mask vector 1.0 where submatrice rows are
+                  call VecSetValue(inmatr%mask_sub,j,1.d0,INSERT_VALUES,ierr)
+               end do
+            end if
+
+            call inmatr%assemble_vectors()
+            call MatMult(inmatr%A,inmatr%x,inmatr%b_adotx,ierr)
+            call VecPointwiseMult(inmatr%b_dummy,inmatr%b,inmatr%mask_sub,ierr)            
+            call VecPointwiseMult(inmatr%b_adotx,inmatr%b_adotx,inmatr%mask_sub,ierr)            
+            call VecDot(inmatr%b_dummy,inmatr%b_dummy,sum_b_sqr,ierr)
+            call VecAXPY(inmatr%b_adotx,-1.d0,inmatr%b_dummy,ierr) 
+
+            call VecDot(inmatr%b_adotx,inmatr%b_adotx,sum_b_min_b_adotx_sqr,ierr)
+            varr_cumm = 1.d0 - (sum_b_min_b_adotx_sqr/sum_b_sqr)
+            
+          end subroutine compute_varr
     !========================================================
 
 
@@ -3186,6 +3273,8 @@
      use module_mesh
 
      implicit none
+
+     PetscScalar outdmy
 
      type(opts) my_opts ! read the inversion options
      type(mesh) my_mesh ! setup the mesh
@@ -3308,21 +3397,25 @@
          call my_matr % compute_adotx(my_matr%x,my_matr%b_rough,my_matr%mask_dat)
 
          call my_post % compute_rough(my_matr,irun)
-         call my_post % compute_cvarr(my_matr,irun)
+!         call my_post % compute_cvarr(my_matr,irun)
 
-         ! ! Compute grouped variance reductions
-         ! if (my_opts%gvarr) then
-         !       do imat=1,my_sche%mats_total
-         !          call my_post % mask_gvarr(my_matr,imat)
-         !          call my_matr % compute_adotx(my_matr%x,my_matr%b_gvarr,my_matr%mask_sub)
-         !          call my_post % compute_gvarr(my_matr,my_matr%b_gvarr,cvarr)
-         !          call my_post % export_gvarr(my_matr,imat)
-         !    end do
-         ! end if
+         call my_post % compute_varr(my_matr,my_sche,0,&
+              my_sche%rows_total,my_post%varr_cumm(irun))
+
+         ! Compute grouped variance reductions
+         if (my_opts%gvarr) then
+            call PetscPrintf(PETSC_COMM_WORLD,"    computing grouped varr!\n",ierr)            
+            do imat=1,my_sche%mats_total
+               call my_post % compute_varr(my_matr,my_sche,&
+                                          my_sche%fromto_info(imat,1),&
+                                          my_sche%fromto_info(imat,2),&
+                                          my_post%varr(imat,irun))
+            end do
+         end if
          
          ! Reparameterize and export solution
          call my_post % reparam_solution(my_opts,my_matr,my_mesh,my_sche)
-         call my_post % export_solution(my_opts,my_matr,my_mesh,my_sche,irun)
+         call my_post % export_solution(my_opts,my_matr,my_mesh,my_sche,irun) ! also dums varr
 
       end do
       !*******************************
