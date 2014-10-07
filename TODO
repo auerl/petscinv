@@ -13,23 +13,10 @@
   warnings etc, when parameters are chosen incorrectly   
 
 - Post-processing module needs to be extended!
-  Variance reduction for data subgroups, logarithmic
-  likeliehood, and normalized model roughness
-
-  Grouped variance reductions, todo:
+  logarithmic likeliehood, and AKAIKE information criteria
 
       * Output of rough and varr needs to be truncated
-      * Need to write mask_rhs_vector routine, which
-        you can just provide row_start, row_end and
-        will give you a neat mask vector
-      * Write a generalized variance reduction routine
-        which will just take a b_adotx vector coming
-        from somewhere and will spit out a variance 
-        reduction. Storing it needs also to be general
-      * At the moment I have many buffers called
-        b_adotx,b_synth,b_gvarr... I may not need them
-      * The same for roughness computations
-
+      * Clean up a little bit remove the b_??? vectors
 
 - Read models for synthetic tests as point clouds
   and automatically project onto inversion grid,
