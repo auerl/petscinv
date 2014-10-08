@@ -970,7 +970,7 @@
             if (verbosity > 1) print*,"Processor:",this%processor
             if (verbosity > 1) print*,this%row_start,this%row_end
 
-            ! Create the rhs and solution vectors
+            ! Create the rhs vectors
             call VecCreateMPI ( PETSC_COMM_WORLD, PETSC_DECIDE, &
                                 insche%rows_total+ &
                                 insche%nrdamprows, &
@@ -995,6 +995,8 @@
                                 insche%rows_total+ &
                                 insche%nrdamprows, &
                                 this%b_rough,ierr)
+
+            ! Mask vectors for VARR, ROUGH and SYNTH
             call VecCreateMPI ( PETSC_COMM_WORLD, PETSC_DECIDE, &
                                 insche%rows_total+ &
                                 insche%nrdamprows, &
@@ -1008,7 +1010,7 @@
                                 insche%nrdamprows, &
                                 this%mask_sub,ierr)
 
-
+            ! Solution vectors
             call VecCreateMPI ( PETSC_COMM_WORLD, PETSC_DECIDE, &
                                 inmesh%blocks_all_param, this%x, ierr)
             call VecCreateMPI ( PETSC_COMM_WORLD, PETSC_DECIDE, &
@@ -1697,11 +1699,8 @@
             call VecAssemblyBegin ( this%mask_dat, ierr)
             call VecAssemblyEnd   ( this%mask_dat, ierr)
 
-            print*,"TEEEST"
-!            call VecAssemblyBegin ( this%mask_sub, ierr)
-!            call VecAssemblyEnd   ( this%mask_sub, ierr)
-            print*,"TEEEST2"
-
+            call VecAssemblyBegin ( this%mask_sub, ierr)
+            call VecAssemblyEnd   ( this%mask_sub, ierr)
 
           end subroutine assemble_matrix
     !========================================================
@@ -2355,7 +2354,6 @@
              procedure, pass :: save_iterations
              procedure, pass :: compute_norm
              procedure, pass :: compute_rough
-             procedure, pass :: compute_cvarr
              procedure, pass :: compute_varr
              procedure, nopass :: sph2cart
              procedure, nopass :: dump_model_ascii
@@ -2394,7 +2392,6 @@
                ! allocate potential output vectors (not all of them may be used)
                if ( inmatr%processor == 0 ) then
 
-
                   call PetscPrintf(PETSC_COMM_WORLD,"    allocate buffers (only done once)!\n",ierr)
                   ! Allocate output arrays
                   allocate ( this%sol_raw(inmesh%blocks_all_param) )
@@ -2420,7 +2417,6 @@
 
                end if
 
-
                ! Buffers for model roughness, norm and iterations
                ! need to be allocated on all processors
                allocate ( this%its(insche%loop_total) )
@@ -2431,28 +2427,7 @@
                allocate ( this%varr_cumm(insche%loop_total) )
                allocate ( this%varr(insche%mats_total,insche%loop_total) )
 
-
-               ! ! Once recompute the roughness damping operator but with uniform weights
-               ! call PetscPrintf(PETSC_COMM_WORLD,"    setup roughness operator (only done once)!\n",ierr)
-               ! call inmatr%apply_rdamp(inopts,inmesh,insche,0)  ! irun 0 tells him apply_rdamp
-               !                                                  ! that i need a unweighted
-               !                                                  ! roughness operator
-               
-               ! ! Extract the uniformly weighted roughness operator as a submatrix for later use
-               ! call ISCreateStride(PETSC_COMM_WORLD,inmesh%blocks_all_param,&
-               !                     insche%rows_total,1,this%isrow,ierr)
-               ! call ISCreateStride(PETSC_COMM_WORLD,inmesh%blocks_all_param,&
-               !                     0,1,this%iscol,ierr)
-               ! call inmatr%assemble_matrix()
-               ! call MatGetSubMatrices(inmatr%A,1,this%isrow,this%iscol,&
-               !                     MAT_INITIAL_MATRIX,this%D0,ierr)
-
-
-!!!               call VecDuplicate ( this%xout, this%rough,ierr)
-!!!               call VecDuplicate ( inmatr%b, this%rough,ierr)
-
                ! Postprocessing instance is now initialized
-
                this%initialized = .true.
                               
             end if
@@ -2465,12 +2440,7 @@
                ! done more elegantly, for sure
                do i=1,inmesh%blocks_all_param                 
                   call VecGetValues(this%xout,1,i-1,this%sol_raw(i),ierr)
-                  ! Fill another MPI vector                  
-!                  call VecSetValue(this%rough,i-1,this%sol_raw(i),INSERT_VALUES,ierr)
                end do
-!               call VecAssemblyBegin(this%sol_postproc,ierr)
-!               call VecAssemblyEnd(this%sol_postproc,ierr)
-
                   
                ! Initialize output arrays
                this%sol_dlnvs = 0.d0
@@ -3141,61 +3111,24 @@
             implicit none
             class(post) :: this
             class(matr) :: inmatr     
+
             PetscInt irun
 
             call PetscPrintf(PETSC_COMM_WORLD,"    computing model roughness!\n",ierr)
 
+            ! Compute adotx
+            call MatMult(inmatr%A,inmatr%x,inmatr%b_rough,ierr)
+
+            ! Apply mask vector mask_dat 
+            call VecPointwiseMult(inmatr%b_rough,inmatr%b_rough,inmatr%mask_dat,ierr)
+
+            ! Compute roughness
             call VecDot(inmatr%b_rough,inmatr%b_rough,this%rough_abs(irun),ierr)
             this%rough_nrm(irun)=this%rough_abs(irun)/&
                  this%norm_abs(irun)
 
           end subroutine compute_rough
     !========================================================
-
-
-    !========================================================
-    !
-    !  @ THIS ROUTINE IS OBSOLETE AND CAN BE REMOVED
-    !  
-          subroutine compute_cvarr(this,inmatr,irun)
-
-            implicit none
-            class(post) :: this
-            class(matr) :: inmatr     
-            PetscInt irun
-
-            Vec b
-            Vec b_sqr                        
-            Vec b_adotx_min
-            Vec b_adotx_min_sqr            
-
-            PetscScalar sum_b_sqr
-            PetscScalar sum_b_adotx_min_sqr
-
-            call PetscPrintf(PETSC_COMM_WORLD,"    computing cummaltive varr!\n",ierr)            
-
-            call VecDuplicate(inmatr%b,b_sqr,ierr)
-            call VecDuplicate(inmatr%b,b,ierr)
-            call VecCopy(inmatr%b,b,ierr)
-
-            call VecPointwiseMult(b_sqr,inmatr%b,inmatr%b,ierr)
-            call VecSum(b_sqr,sum_b_sqr,ierr)
-              
-            call VecDuplicate(inmatr%b_adotx,b_adotx_min,ierr)
-            call VecDuplicate(inmatr%b_adotx,b_adotx_min_sqr,ierr)
-            call VecCopy(inmatr%b_adotx,b_adotx_min,ierr)
-
-            call VecAXPY(b,-1.d0,b_adotx_min,ierr)
-            call VecPointwiseMult(b_adotx_min_sqr,b_adotx_min,b_adotx_min,ierr)
-            call VecSum(b_adotx_min_sqr,sum_b_adotx_min_sqr,ierr)
-
-            this%varr_cumm(irun) = 1.d0 - (sum_b_sqr/sum_b_adotx_min_sqr)
-            if ( verbosity > 1 ) print*,"Cummulative variance reduction: ",this%varr_cumm(irun)
-
-
-          end subroutine compute_cvarr
-    !========================================================
-
 
 
     !========================================================
@@ -3246,10 +3179,6 @@
 
       end module module_postproc
 !============================================================
-
-
-
-
 
 
 
@@ -3389,16 +3318,12 @@
          call my_post % save_iterations(my_solv,irun)
          call my_post % compute_norm(my_matr,irun)
 
-         ! Compute adotx with solution vector for postprocessing
+         ! Compute model roughness
          call my_matr % apply_rdamp(my_opts,my_mesh,my_sche,0)  ! irun 0 to get unweighted operator
-         call my_matr % assemble_matrix() ! Need to reassemble matrices and vectors after rdamp
-
-         call my_matr % compute_adotx(my_matr%x,my_matr%b_adotx)
-         call my_matr % compute_adotx(my_matr%x,my_matr%b_rough,my_matr%mask_dat)
-
+         call my_matr % assemble_matrix() ! Need to reassemble matrices and vectors
          call my_post % compute_rough(my_matr,irun)
-!         call my_post % compute_cvarr(my_matr,irun)
 
+         ! Compute global variamce reduction
          call my_post % compute_varr(my_matr,my_sche,0,&
               my_sche%rows_total,my_post%varr_cumm(irun))
 
