@@ -526,8 +526,6 @@
 
 
 
-
-
 !============================================================
 ! 
 !  module related to the inversion schedule
@@ -921,7 +919,6 @@
              procedure :: compute_adotx
              procedure :: destroy_matrix
              procedure :: read_synth_model
-!             procedure :: compute_synthetics
           end type matr
 
         contains
@@ -1747,33 +1744,132 @@
 
 
     !========================================================
-          subroutine read_synth_model(this,inmesh,model)
+          subroutine read_synth_model(this,inopts,inmesh,insche)
 
             implicit none
             class(matr) :: this
+            class(opts) :: inopts
             class(mesh) :: inmesh
-            character(len=*), intent(in) :: model
+            class(sche) :: insche
+
             PetscInt,          parameter :: fh=20 ! file handler
             PetscInt                        dummy
+            PetscChar(256)                  dummychar
             PetscInt                        ipar
             PetscInt                        ios
             PetscScalar                     xval
+            PetscChar(256)                  mode
+            PetscInt                        npoints
+            PetscInt                        ipoint
+            PetscScalar                     lat
+            PetscScalar                     lon
+            PetscScalar                     dep
+            PetscInt                        i,j,k,h,l,u
+            PetscInt                        row_petsc
+            PetscBool                       foundlay
+            PetscScalar,     allocatable :: valtot(:,:)
+            PetscScalar,     allocatable :: numper(:,:)
 
-            call PetscPrintf(PETSC_COMM_WORLD,"    reading synthetic input model!\n",ierr)            
+            call PetscPrintf(PETSC_COMM_WORLD,"    reading synthetic input model!\n",ierr)
 
             if ( this%processor == 0 ) then
-               select case(trim(model))
-               case ('checkerboard')
-                  call PetscPrintf(PETSC_COMM_WORLD,"Checkerboard not yet implemented\n",ierr)            
+
+               open(fh,file=trim(inopts%synth))               
+               read(unit=fh,fmt=*,iostat=ios) mode
+               call PetscPrintf(PETSC_COMM_WORLD,"    File: "//trim(inopts%synth)// "\n",ierr)
+
+               select case(trim(mode))
+
+               case ('CHECKERBOARD')
+                  call PetscPrintf(PETSC_COMM_WORLD,"Checkerboard not yet implemented\n",ierr)
                   stop
-               case default                  
-                  open(fh,file=trim(model))
+
+               case ('POINTCLOUD')
+                  allocate(numper(n0max,inopts%nlays))
+                  allocate(valtot(n0max,inopts%nlays))
+                  read(unit=fh,fmt=*,iostat=ios) npoints
+
+                  ! Loop over parameter
+                  do u=1,inopts%npars
+
+                     ! Initialize arrays for new parameter
+                     numper=0.d0
+                     valtot=0.d0
+                     l=0
+
+                     read(unit=fh,fmt=*,iostat=ios) dummychar
+                     
+                     ! Loop over npoints per parameter
+
+                     do ipoint=1,npoints
+
+                        ! if (mod(ipoint,int(npoints/100.d0)).eq.0) then
+                        !    print*,"read",ipoint
+                        ! end if   
+
+                        ! Read point
+                        read(unit=fh,fmt=*,iostat=ios) lat,lon,dep,xval
+
+                        ! Shift grid
+                        lon=lon+360.d0 
+                        if (lon.gt.(359.60)) lon=lon-360.d0 
+
+                        ! In which layer are we
+                        foundlay=.false.
+
+                        do h=1,inmesh%nlays
+                           if((dep.gt.insche%layer(h)).and.&
+                                (dep.le.insche%layer(h+1)))then
+                              if(.not.foundlay)then
+                                 foundlay=.true.
+                                 l=h
+                              else
+                                 call PetscPrintf(PETSC_COMM_WORLD,"Error in read_synth_model",ierr)
+                                 call PetscPrintf(PETSC_COMM_WORLD,"Point lies b/w two layers",ierr)
+                                 stop 
+                              endif
+                           endif
+                        enddo
+                        if (l==0) stop "Something went wrong"
+                                               
+                        ! In which pixel are we
+                        do i=1,inmesh%blocks_per_layer(l)
+                           if ((lon.ge.inmesh%xlomin(i,l)).and.&
+                                (lon.le.inmesh%xlomax(i,l)).and.&
+                                (lat.ge.inmesh%xlamin(i,l)).and.&
+                                (lat.le.inmesh%xlamax(i,l))) then                           
+
+                              numper(i,l)=numper(i,l)+1.d0
+                              valtot(i,l)=valtot(i,l)+xval
+
+                           end if
+                        end do
+                     end do ! end of loop over npoints
+
+                     ! Set values of x_synth
+                     row_petsc=(u-1)*inmesh%blocks_per_param
+                     do j=1,inmesh%nlays
+                        do k=1,inmesh%blocks_per_layer(l)                        
+                           valtot(k,j)=valtot(k,j)/numper(k,j)
+                           ! print*,valtot(k,j)
+                           call VecSetValue(this%x_synth,row_petsc,valtot(k,j)/100.d0,INSERT_VALUES,ierr)
+                           row_petsc=row_petsc+1
+                        enddo
+                     enddo
+
+                  end do ! end of loop over npar
+
+                  deallocate(numper)
+                  deallocate(valtot)
+                  
+               case ('MODEL')           
                   do ipar=1,inmesh%blocks_all_param
                      read(unit=fh,fmt=*,iostat=ios) dummy,xval            
                      call VecSetValue(this%x_synth,ipar-1,xval/100.d0,INSERT_VALUES,ierr)
                   end do                   
-                  close(fh)  
                end select
+
+               close(fh)  
             end if
             
           end subroutine read_synth_model
@@ -2371,7 +2467,7 @@
     !
     !   collect solution vector from all processors
     !
-          subroutine initialize_postproc(this,inopts,inmatr,inmesh,insche)
+          subroutine initialize_postproc(this,inopts,inmatr,inmesh,insche,sol_vec)
 
             implicit none
             class(post) :: this
@@ -2379,7 +2475,16 @@
             class(matr) :: inmatr
             class(mesh) :: inmesh
             class(sche) :: insche
+
+            Vec, intent(in), optional :: sol_vec
             PetscInt i
+
+            ! In case a solution vector is passed to init, replace inmatr%x with
+            ! this solution vector! Relevant for exporting solutions
+            if (present(sol_vec)) then
+               call inmatr%assemble_vectors()
+               call VecCopy(sol_vec,inmatr%x,ierr)
+            end if
 
             ! collect solution vector from all processors and stores in one sequential vector
             call VecScatterCreateToZero(inmatr%x,this%ctx,this%xout,ierr)
@@ -2666,7 +2771,7 @@
     !
     !  Helper function, facilitating model export
     !
-          subroutine export_solution(this,inopts,inmatr,inmesh,insche,irun)
+          subroutine export_solution(this,inopts,inmatr,inmesh,insche,irun,idsyn)
 
             implicit none
             class(post) :: this          
@@ -2676,6 +2781,8 @@
             class(sche) :: insche
 
             PetscInt, intent(in) :: irun
+            character(len=*), intent(in), optional :: idsyn
+
             PetscChar(512) ident_base
             PetscChar(512) ident
 
@@ -2685,6 +2792,11 @@
                  trim(int2str(int(insche%dloop(2,irun))))//'.'//&
                  trim(int2str(int(insche%dloop(3,irun))))//'.'//&
                  trim(int2str(int(insche%dloop(4,irun))))
+
+            if (present(idsyn)) then
+               ident_base=trim(inopts%projid)//'_'//trim(idsyn)
+               call PetscPrintf(PETSC_COMM_WORLD,"    exporting synthetic input model!\n",ierr)              
+            end if
             
             call PetscPrintf(PETSC_COMM_WORLD,"    exporting model!\n",ierr)              
 
@@ -2785,8 +2897,10 @@
                end select
 
                if (inopts%gvarr) then
-                  ident=trim(ident_base)//'_varr.dat'
-                  call this%dump_varr(insche,ident,irun)
+                  if (.not.present(idsyn)) then
+                     ident=trim(ident_base)//'_varr.dat'
+                     call this%dump_varr(insche,ident,irun)
+                  end if
                end if
                
             end if
@@ -3293,15 +3407,21 @@
          call PetscPrintf(PETSC_COMM_WORLD,"\n--- ASSEMBLING MATRIX --->\n",ierr)
          call my_matr % assemble_matrix()
 
-         ! In case this is the first irun, store rhs
-         if (irun==1) call my_matr % store_rhs()           
+         ! In case this is the first run, store rhs
+         if (irun==1) call my_matr % store_rhs()   
 
          ! Compute synthetic rhs vector
          if (my_sche%isynth) then
             call PetscPrintf(PETSC_COMM_WORLD,"\n--- COMPUTING SYNTHETICS --->\n",ierr)
-            call my_matr % read_synth_model(my_mesh,my_opts%synth)
+            ! In case of first run, dump synthetic input model
+            if (irun==1) then               
+               call my_matr % read_synth_model(my_opts,my_mesh,my_sche) ! @ TODO: why do I re-read the synthetic model
+               call my_post % initialize_postproc(my_opts,my_matr,my_mesh,my_sche,my_matr%x_synth) ! @ TODO: Can't i just initialize it at one loc?
+               call my_post % reparam_solution(my_opts,my_matr,my_mesh,my_sche) ! reparameterize input synthetic model
+               call my_post % export_solution(my_opts,my_matr,my_mesh,my_sche,irun,'synth_input') ! dump input synthetic model
+            end if
             call my_matr % assemble_matrix() ! Need to reassemble matrices and vectors
-            call my_matr % compute_adotx(my_matr%x_synth,my_matr%b,my_matr%mask_dmp)
+            call my_matr % compute_adotx(my_matr%x_synth,my_matr%b,my_matr%mask_dmp) ! compute rhs vector
          end if
 
          ! Solve the system
