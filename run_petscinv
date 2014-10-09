@@ -2,18 +2,21 @@
 
 # Solves precomputed tomography matrices using our new petsc solver
 
-mpirun -n 12 ./petscinv \
+mpirun -n 6 ./petscinv \
     -matrix_schedule 'samples/schedule_swbw' \
     -inparam_file 'samples/inparam' \
     -inversion_parameters 'vsh,vsv' \
     -reference_model 'prem_ani' \
     -number_of_layers 21 \
+    -synthetic_model 'samples/synth_pointcloud.pcn' \
     -equatorial_increment 5.0 \
-    -project_id 'INV03' \
+    -project_id 'INV04' \
     -output_format 'ascii' \
     -solution_type 'normal' \
     -ksp_monitor \
+    -grouped_varr \
     -ksp_type gmres
+
 
 
 #
@@ -26,8 +29,11 @@ mpirun -n 12 ./petscinv \
 #   One may need to check whether this is really the case before
 #   defining a final model
 # 
-# * If you want to run a synthetic test just add the line
-#   -synthetic_model 'synth.pcn' \
+# * If you want to run a synthetic test just add the line. You
+#   can either read models parameterized in the actual tomography
+#   parameterization or as pointclouds
+#   -synthetic_model 'samples/synth.pcn' \
+#   -synthetic_model 'samples/synth_pointcloud.pcn' \
 #
 # * In case of an adaptive grid add the command line arguments
 #   -grid_info 'grid/grid.info.rit.S.d' \
