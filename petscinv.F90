@@ -1,17 +1,18 @@
+!  ------------------------------------------------------------------------- 
 !
+!  PETScinv: 
+!  
 !  Solves a tomographic linear system in parallel with KSP.  Allows
 !  for solution of rectangular systmes using a parallel implementaion
 !  of lsqr, or the normal equations using various direct solvers
 !
-!  Program usage: petsc -n NP ./petscinv [-help] [all PETSc options]
+!  This is a complete Fortran 2008 rewrite of Lapo Boschi's original 
+!  tomography toolbox. This is research code and we give no warranty
+!  nor do we guaranty fitness for a particular purpose.
 !
-!/*T
-!   Concepts: KSP^basic parallel
-!   Concepts: 
-!   Processors: n
-!T*/
+!  Compile with "make" and run with "./run_petscinv""
 !
-! (c) Ludwig Auer 2014
+!  Copyright (c) 2013 - 2014 Ludwig Auer, ludwig.auer@tomo.ig.erdw.ethz.ch
 !
 !  ------------------------------------------------------------------------- 
 
@@ -106,6 +107,7 @@
 
         type,public :: opts
            PetscScalar    eqinc
+           PetscScalar    eqinc_ref
            PetscInt       npars
            PetscInt       nlays
            PetscBool      adapt
@@ -136,7 +138,8 @@
             implicit none
             class(opts) :: this
 
-            ! Initialize some variables
+            ! Initialize some default variables
+            this%eqinc_ref=ref_eqinc ! defined in the very top
             this%synth=''
 
             call PetscOptionsGetInt(PETSC_NULL_CHARACTER,&
@@ -241,6 +244,10 @@
            PetscScalar,   allocatable :: xlamax(:,:)
            PetscScalar,   allocatable :: xlomin(:,:)
            PetscScalar,   allocatable :: xlomax(:,:)
+
+           PetscScalar,   allocatable :: locent(:,:)
+           PetscScalar,   allocatable :: lacent(:,:)
+
            PetscScalar,   allocatable :: radmin(:,:)
            PetscScalar,   allocatable :: radmax(:,:)
            PetscInt,      allocatable :: levels(:,:)
@@ -277,6 +284,8 @@
           allocate ( this%xlomax( n0max , options%nlays ) )
           allocate ( this%radmin( n0max , options%nlays ) )
           allocate ( this%radmax( n0max , options%nlays ) )
+          allocate ( this%locent( n0max , options%nlays ) )
+          allocate ( this%lacent( n0max , options%nlays ) )
           allocate ( this%nsqrs_tot( nlmax ) ) ! 180/0.625
           allocate ( this%nsqrs( nlmax ) ) ! 180/0.625
           
@@ -284,7 +293,7 @@
           this%eqinc = options%eqinc
           this%adapt = options%adapt
           this%nlays = options%nlays
-          this%eqinc_ref = ref_eqinc
+          this%eqinc_ref = options%eqinc_ref
           this%blocks_per_layer(:) = 0
           this%blocks_per_param    = 0
 
@@ -357,6 +366,12 @@
                                     this%xlamax(j,i),&
                                     this%xlomin(j,i),&
                                     this%xlomax(j,i)
+
+                ! Compute center lat and lon
+                this%lacent(j,i)=abs((this%xlamax(j,i)-&
+                     this%xlamin(j,i))/2) + this%xlamin(j,i)
+                this%locent(j,i)=abs((this%xlomax(j,i)-&
+                     this%xlomin(j,i))/2) + this%xlomin(j,i)                
              end do
           end do
              
@@ -418,11 +433,12 @@
              end if
           enddo
 
+
           ! define actual grid as integer of reference grid
           fact  = this%eqinc_ref / this%eqinc
           n1lay = 0
           call PetscPrintf(PETSC_COMM_WORLD,&
-               "Ratio of coarse to fine grid: "//&
+               "MESHER: Ratio of coarse to fine grid: "//&
                trim(int2str(int(fact)))//"\n",ierr)
           do k = 1,nlatz
              k_ref = ( (k-1) / int(fact) ) + 1
@@ -430,32 +446,40 @@
              n1lay             = n1lay + this%nsqrs(k)
              this%nsqrs_tot(k) = n1lay
           enddo
-
+          
           this%nlatzones = nlatz
-
+          
           ! in all layers we have the same nr of blocks
           this%blocks_per_layer(:) = n1lay           
-
+          
           call PetscPrintf(PETSC_COMM_WORLD,&
-               'Number of pixel with finest\
-                parameterization: '//trim(int2str(&
-                this%blocks_per_layer(1)))//'\n',ierr)
-
+               'MESHER: Number of pixel with finest\
+          parameterization: '//trim(int2str(&
+               this%blocks_per_layer(1)))//'\n',ierr)
+          
           ! continue down to other layers
           do i=1,this%nlays
              do j=1,this%blocks_per_layer(i)
-               coords = this%coordinates(j) !,lami,lama,blocla,lomi,loma,bloclo,&
-                                     ! nsqrs,nsqtot,nlatzones,n0,eqincr)
-               this%levels(j,i) = 1 ! we just have one level
-               this%xlamin(j,i) = coords(1)
-               this%xlamax(j,i) = coords(2)
-               this%xlomin(j,i) = coords(3)
-               this%xlomax(j,i) = coords(4) ! dont need coords(5:6)
 
-            end do
-            this%blocks_per_param = this%blocks_per_param + &
-                 this%blocks_per_layer(i)
-         end do
+                ! Get coordinate ranges
+                coords = this%coordinates(j) 
+
+                ! Minimum and maximum lat and lon
+                this%levels(j,i) = 1 ! we just have one level
+                this%xlamin(j,i) = coords(1)
+                this%xlamax(j,i) = coords(2)
+                this%xlomin(j,i) = coords(3)
+                this%xlomax(j,i) = coords(4) ! dont need coords(5:6)
+
+                ! Compute center lat and lon
+                this%lacent(j,i) = coords(5)
+                this%locent(j,i) = coords(6)
+                
+             end do
+             this%blocks_per_param = this%blocks_per_param + &
+                  this%blocks_per_layer(i)
+          end do
+          
         end subroutine gen_mesh
     !========================================================
 
@@ -1747,29 +1771,33 @@
           subroutine read_synth_model(this,inopts,inmesh,insche)
 
             implicit none
+
             class(matr) :: this
             class(opts) :: inopts
             class(mesh) :: inmesh
             class(sche) :: insche
 
+            type(mesh) check_mesh ! setup new mesh for checkerboard
+            type(opts) check_opts ! setup new opts for checkerboard
+
             PetscInt,          parameter :: fh=20 ! file handler
             PetscInt                        dummy
-            PetscChar(256)                  dummychar
-            PetscInt                        ipar
-            PetscInt                        ios
-            PetscScalar                     xval
             PetscChar(256)                  mode
-            PetscInt                        npoints
-            PetscInt                        ipoint
-            PetscScalar                     lat
-            PetscScalar                     lon
-            PetscScalar                     dep
+            PetscInt                        ipar,ios
+            PetscInt                        npoints,ipoint
+            PetscScalar                     lat,lon,dep,xval
             PetscInt                        i,j,k,h,l,u
             PetscInt                        row_petsc
             PetscBool                       foundlay
+            PetscInt                        found
+
+            PetscScalar                     eqinc_check
+            PetscScalar,     allocatable :: check_vals(:)
+
+            PetscScalar,     allocatable :: switch_facts(:,:)
             PetscScalar,     allocatable :: valtot(:,:)
             PetscScalar,     allocatable :: numper(:,:)
-
+            
             call PetscPrintf(PETSC_COMM_WORLD,"    reading synthetic input model!\n",ierr)
 
             if ( this%processor == 0 ) then
@@ -1781,10 +1809,103 @@
                select case(trim(mode))
 
                case ('CHECKERBOARD')
-                  call PetscPrintf(PETSC_COMM_WORLD,"Checkerboard not yet implemented\n",ierr)
-                  stop
+                  
+                  !
+                  ! Checkerboard model files have the following format
+                  !
+                  ! CHECKERBOARD # mode in first line
+                  ! 20.0         # checkerboard eqincr
+                  ! 2.0    -2.0  # Amplitude factors for the n parameters
+                  ! 2.0    -2.0  # n = number of columns
+                  ! ...
+                  !
+
+                  allocate(switch_facts(inopts%nlays,inopts%npars))
+                  allocate(valtot(n0max,inopts%nlays))
+
+                  read(unit=fh,fmt=*,iostat=ios) eqinc_check
+                  do i=1,inopts%nlays
+                     read(fh, fmt=*, iostat=ios) switch_facts(i,1:inopts%npars)
+                  end do
+
+                  ! Some more parameters needed to set up checkerboard
+                  check_opts%adapt=.false.
+                  check_opts%nlays=inopts%nlays
+                  check_opts%npars=1 ! not strictly needed
+                  check_opts%eqinc=eqinc_check
+                  check_opts%eqinc_ref=eqinc_check ! this is important
+
+                  ! Setup new checkerboard mesh
+                  call PetscPrintf(PETSC_COMM_WORLD,"...\n",ierr)
+                  call check_mesh%setup_mesh(check_opts)
+                  call PetscPrintf(PETSC_COMM_WORLD,"...\n",ierr)
+
+                  ! Initialize checkerboard values
+                  allocate(check_vals(check_mesh%blocks_per_layer(1)))
+                  check_vals(1)=1.d0
+                  do i=2,check_mesh%blocks_per_layer(1) ! just do it for layer 1
+                     check_vals(i) = check_vals(i-1)*(-1.d0)
+                     if(check_mesh%xlamin(i,1).lt.check_mesh%xlamin(i-1,1)) then                        
+                        check_vals(i) = check_vals(i)*(-1.d0)
+                     end if
+                  end do
+                    
+                  ! Loop over parameter
+                  do u=1,inopts%npars
+                     do i=1,inopts%nlays
+                        do j=1,inmesh%blocks_per_layer(i)
+                           found=0
+                           do h=1,check_mesh%blocks_per_layer(1)
+                              if ((inmesh%locent(j,i).ge.check_mesh%xlomin(h,1)).and.&
+                                   (inmesh%locent(j,i).lt.check_mesh%xlomax(h,1)).and.&
+                                   (inmesh%lacent(j,i).ge.check_mesh%xlamin(h,1)).and.&
+                                   (inmesh%lacent(j,i).lt.check_mesh%xlamax(h,1))) then
+                                 valtot(j,i)=check_vals(h)*switch_facts(i,u)
+                                 found=found+1
+                              end if
+                           end do
+
+                           ! Some sanity checks
+                           if (found.lt.1.) then
+                              call PetscPrintf(PETSC_COMM_WORLD,"Error in checkerboard creation",ierr)
+                              stop
+                           else if (found.gt.1) then
+                              call PetscPrintf(PETSC_COMM_WORLD,"Error in checkerboard creation",ierr)
+                              stop
+                           end if
+                        end do
+                     end do ! end fo loop over inopts%nlay
+
+                     ! Set values of x_synth
+                     row_petsc=(u-1)*inmesh%blocks_per_param
+                     do j=1,inmesh%nlays                        
+                        do k=1,inmesh%blocks_per_layer(j)
+                           ! print*,valtot(k,j)
+                           call VecSetValue(this%x_synth,row_petsc,&
+                                valtot(k,j)/100.d0,INSERT_VALUES,ierr)
+                           row_petsc=row_petsc+1
+                        enddo
+                     enddo
+
+                  end do ! end of loop over npars
+                                                                          
+                  deallocate(switch_facts)                 
+                  deallocate(valtot)
 
                case ('POINTCLOUD')
+
+                  !
+                  ! Pointcloud model files have the following format
+                  !
+                  ! POINTCLOUD # mode in first line
+                  ! 1000000    # number of points per parameter
+                  !  1.275     # npar*npoints model coefficinets in %
+                  !  1.556
+                  !  0.988
+                  ! -0.899
+                  ! ...
+                  !
+
                   allocate(numper(n0max,inopts%nlays))
                   allocate(valtot(n0max,inopts%nlays))
                   read(unit=fh,fmt=*,iostat=ios) npoints
@@ -1796,16 +1917,9 @@
                      numper=0.d0
                      valtot=0.d0
                      l=0
-
-                     read(unit=fh,fmt=*,iostat=ios) dummychar
                      
                      ! Loop over npoints per parameter
-
                      do ipoint=1,npoints
-
-                        ! if (mod(ipoint,int(npoints/100.d0)).eq.0) then
-                        !    print*,"read",ipoint
-                        ! end if   
 
                         ! Read point
                         read(unit=fh,fmt=*,iostat=ios) lat,lon,dep,xval
@@ -1849,10 +1963,11 @@
                      ! Set values of x_synth
                      row_petsc=(u-1)*inmesh%blocks_per_param
                      do j=1,inmesh%nlays
-                        do k=1,inmesh%blocks_per_layer(l)                        
+                        do k=1,inmesh%blocks_per_layer(j)
                            valtot(k,j)=valtot(k,j)/numper(k,j)
                            ! print*,valtot(k,j)
-                           call VecSetValue(this%x_synth,row_petsc,valtot(k,j)/100.d0,INSERT_VALUES,ierr)
+                           call VecSetValue(this%x_synth,row_petsc,&
+                                valtot(k,j)/100.d0,INSERT_VALUES,ierr)
                            row_petsc=row_petsc+1
                         enddo
                      enddo
@@ -1862,10 +1977,23 @@
                   deallocate(numper)
                   deallocate(valtot)
                   
-               case ('MODEL')           
+               case ('VOXEL')
+
+                  !
+                  ! Voxel model files have the following format
+                  !
+                  ! VOXEL     # mode in first line
+                  ! 1  1.275  # n voxel id (int) and coeff in %
+                  ! 2  1.556  # n = nvoxels * nparams
+                  ! 3  0.988 
+                  ! 4 -0.899
+                  ! ...
+                  !
+
                   do ipar=1,inmesh%blocks_all_param
                      read(unit=fh,fmt=*,iostat=ios) dummy,xval            
-                     call VecSetValue(this%x_synth,ipar-1,xval/100.d0,INSERT_VALUES,ierr)
+                     call VecSetValue(this%x_synth,ipar-1,&
+                          xval/100.d0,INSERT_VALUES,ierr)
                   end do                   
                end select
 

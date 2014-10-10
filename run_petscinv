@@ -8,9 +8,9 @@ mpirun -n 6 ./petscinv \
     -inversion_parameters 'vsh,vsv' \
     -reference_model 'prem_ani' \
     -number_of_layers 21 \
-    -synthetic_model 'samples/synth_pointcloud.pcn' \
+    -synthetic_model 'samples/synth_checkerboard.pcn' \
     -equatorial_increment 5.0 \
-    -project_id 'INV04' \
+    -project_id 'INV01' \
     -output_format 'ascii' \
     -solution_type 'normal' \
     -ksp_monitor \
