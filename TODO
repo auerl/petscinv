@@ -18,10 +18,7 @@
       * Output of rough and varr needs to be truncated
       * Clean up a little bit remove the b_??? vectors
 
-- Read models for synthetic tests as point clouds
-  and automatically project onto inversion grid,
-  and a routine computing checkerboard models
-  and build routine that adds random noise
+- build routine that adds random noise to rhs
 
 - Module to compute resolution matrix
 
