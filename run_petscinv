@@ -3,12 +3,11 @@
 # Solves precomputed tomography matrices using our new petsc solver
 
 mpirun -n 6 ./petscinv \
-    -matrix_schedule 'samples/schedule_swbw' \
+    -matrix_schedule 'samples/schedule' \
     -inparam_file 'samples/inparam' \
     -inversion_parameters 'vsh,vsv' \
     -reference_model 'prem_ani' \
     -number_of_layers 21 \
-    -synthetic_model 'samples/synth_checkerboard.pcn' \
     -equatorial_increment 5.0 \
     -project_id 'INV01' \
     -output_format 'ascii' \
@@ -34,6 +33,7 @@ mpirun -n 6 ./petscinv \
 #   parameterization or as pointclouds
 #   -synthetic_model 'samples/synth.pcn' \
 #   -synthetic_model 'samples/synth_pointcloud.pcn' \
+#   -synthetic_model 'samples/synth_checkerboard.pcn' \
 #
 # * In case of an adaptive grid add the command line arguments
 #   -grid_info 'grid/grid.info.rit.S.d' \
