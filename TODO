@@ -1,5 +1,15 @@
 @TODO
 
+- Adaptive gridding
+  It would be optimal if I could Include the adaptive 
+  grid routines in my inversion code. One essentially just
+  provides the basic matrices, and the projection will be
+  done automatically
+
+- Cummulative sensitivity
+  A routine to compute cummulative sensitivity for each 
+  model parameter would be nice to have
+
 - Some improvements to xdmf output needed:
   It would be a bit better to uniquify the vertices in 
   xdmf output, at the moment there are redundant points
