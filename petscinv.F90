@@ -2538,6 +2538,7 @@
              PetscScalar, allocatable :: sol_dlnvpv(:)
              PetscScalar, allocatable :: sol_dlnvp(:)
              PetscScalar, allocatable :: sol_dlnvs(:)
+             PetscScalar, allocatable :: sol_dlnvc(:)
              PetscScalar, allocatable :: sol_vpv(:)
              PetscScalar, allocatable :: sol_vph(:)
              PetscScalar, allocatable :: sol_vsv(:)
@@ -2565,6 +2566,7 @@
              PetscBool do_vph,do_vpv
              PetscBool do_xi,do_ph
              PetscBool do_vs,do_vp
+             PetscBool do_vc
 
              PetscBool initialized
 
@@ -2629,6 +2631,7 @@
                   ! Allocate output arrays
                   allocate ( this%sol_raw(inmesh%blocks_all_param) )
                   allocate ( this%sol_dlnvs(inmesh%blocks_per_param) )
+                  allocate ( this%sol_dlnvc(inmesh%blocks_per_param) )
                   allocate ( this%sol_dlnvp(inmesh%blocks_per_param) )
                   allocate ( this%sol_dlnvsh(inmesh%blocks_per_param) )
                   allocate ( this%sol_dlnvsv(inmesh%blocks_per_param) )
@@ -2677,6 +2680,7 @@
                   
                ! Initialize output arrays
                this%sol_dlnvs = 0.d0
+               this%sol_dlnvc = 0.d0
                this%sol_dlnvp = 0.d0
                this%sol_dlnvsh = 0.d0
                this%sol_dlnvph = 0.d0
@@ -2698,6 +2702,7 @@
                this%do_vpv = .false.
                this%do_vs  = .false.
                this%do_vp  = .false.
+               this%do_vc  = .false.
             end if
 
             call PetscPrintf(PETSC_COMM_WORLD,"    done with initialization!\n",ierr)
@@ -2769,9 +2774,10 @@
             
             PetscScalar dlnvsh,dlnvsv
             PetscScalar dlnvph,dlnvpv
-            PetscScalar dlnvp,dlnvs
+            PetscScalar dlnvp,dlnvs,dlnvc
             PetscScalar vsh,vsv
             PetscScalar vph,vpv
+            PetscScalar gamma
             PetscScalar ref_vsh,ref_vsv
             PetscScalar ref_vph,ref_vpv
             PetscScalar ref_vs,ref_vp
@@ -2821,6 +2827,10 @@
                   this%do_vp = .true.
                   this%do_ph = .true.
                end if
+               if (this%do_vp.and.this%do_vs) then 
+                  this%do_vc = .true.
+               end if
+
 
                k = 0
                do l=2,inopts%nlays+1
@@ -2840,6 +2850,7 @@
                   ! Voigt average velocities
                   ref_vp = dsqrt ( ( ref_vpv**2 + 4*ref_vph**2 ) / 5 )
                   ref_vs = dsqrt ( ( 2*ref_vsv**2 + ref_vsh**2 ) / 3 )
+                  gamma  = (4.d0/3.d0) * ref_vs**2 / ref_vp**2
 
                   do j=k+1,k+inmesh%blocks_per_layer(i) 
                      if (this%do_vph) then
@@ -2869,6 +2880,10 @@
                      if (this%do_vs) then
                         this%sol_vs(j) = dsqrt ( ( 2*this%sol_vsv(j)**2 + this%sol_vsh(j)**2 ) / 3 )
                         this%sol_dlnvs(j) = ( this%sol_vs(j) - ref_vs ) / ref_vs
+                     end if
+                     if (this%do_vc) then
+                        ! This equation is taken from Paulas paper
+                        this%sol_dlnvc(j) = (1.d0 / 1.d0 - gamma) * (this%sol_dlnvp(j) - gamma * this%sol_dlnvs(j))
                      end if
                      if (this%do_xi) then
                         this%sol_xi(j) = this%sol_vsh(j)**2/this%sol_vsv(j)**2
@@ -2943,6 +2958,10 @@
                      ident=trim(ident_base)//'_vp'
                      call this%dump_model_xdmf(inmesh,insche,this%sol_vp,ident)  
                   end if
+                  if (this%do_vc) then
+                     ident=trim(ident_base)//'_dlnvc'
+                     call this%dump_model_xdmf(inmesh,insche,this%sol_dlnvc,ident)
+                  end if
                   if (this%do_vsh) then
                      ident=trim(ident_base)//'_dlnvph'
                      call this%dump_model_xdmf(inmesh,insche,this%sol_dlnvph,ident)
@@ -2985,6 +3004,10 @@
                      call this%dump_model_ascii(this%sol_dlnvs,ident)      
                      ident=trim(ident_base)//'_vs.abs'
                      call this%dump_model_ascii(this%sol_vs,ident)
+                  end if
+                  if (this%do_vc) then
+                     ident=trim(ident_base)//'_dlnvc.pcn'                     
+                     call this%dump_model_ascii(this%sol_dlnvc,ident)
                   end if
                   if (this%do_vsh) then
                      ident=trim(ident_base)//'_dlnvsh.pcn'
