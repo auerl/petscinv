@@ -2,9 +2,10 @@
 
 # Solves precomputed tomography matrices using our new petsc solver
 
-mpirun -n 6 ./petscinv \
+mpirun -n 1 ./petscinv \
     -matrix_schedule 'samples/schedule' \
     -inparam_file 'samples/inparam' \
+    -varr_model_array 'samples/model_array.in' \
     -inversion_parameters 'vsh,vsv' \
     -reference_model 'prem_ani' \
     -number_of_layers 21 \
@@ -34,6 +35,10 @@ mpirun -n 6 ./petscinv \
 #   -synthetic_model 'samples/synth.pcn' \
 #   -synthetic_model 'samples/synth_pointcloud.pcn' \
 #   -synthetic_model 'samples/synth_checkerboard.pcn' \
+#
+# * You can also just test variance reduction using a synthetic
+#   input model, as a simple hypothesis test using
+#   -varr_model_array 'samples/model_array.in' \
 #
 # * In case of an adaptive grid add the command line arguments
 #   -grid_info 'grid/grid.info.rit.S.d' \
