@@ -118,6 +118,7 @@
            PetscChar(256) inpar
            PetscChar(256) param
            PetscChar(256) synth
+           PetscChar(256) modarr
            PetscChar(256) refmod
            PetscChar(256) format
            PetscChar(256) projid
@@ -141,6 +142,7 @@
             ! Initialize some default variables
             this%eqinc_ref=ref_eqinc ! defined in the very top
             this%synth=''
+            this%modarr=''
 
             call PetscOptionsGetInt(PETSC_NULL_CHARACTER,&
                  '-number_of_layers',this%nlays,flg,ierr)
@@ -164,6 +166,8 @@
                  '-inparam_file',this%inpar,flg,ierr)
             call PetscOptionsGetString(PETSC_NULL_CHARACTER,&
                  '-synthetic_model',this%synth,flg,ierr)
+            call PetscOptionsGetString(PETSC_NULL_CHARACTER,&
+                 '-varr_model_array',this%modarr,flg,ierr)
             call PetscOptionsGetString(PETSC_NULL_CHARACTER,&
                  '-grid_info',this%grdin,flg,ierr)
             call PetscOptionsGetString(PETSC_NULL_CHARACTER,&
@@ -573,6 +577,7 @@
            PetscBool        iddamp
            PetscBool        iscale
            PetscBool        isynth
+           PetscChar(256)   major_mode
            PetscChar(256)   inpar_file
            PetscChar(256)   sched_file
            PetscScalar,     allocatable :: ndamp(:,:)
@@ -584,10 +589,14 @@
            PetscInt,        allocatable :: prealloc(:) 
            PetscScalar,     allocatable :: meta_info(:,:)
            PetscInt,        allocatable :: fromto_info(:,:)
-           character(500),  allocatable :: path_info(:,:)           
+           character(500),  allocatable :: path_info(:,:)
+           character(500),  allocatable :: modarr_path(:)
+           PetscScalar,     allocatable :: modarr_res(:,:)     
+           PetscInt         modarr_tot       
          contains
            procedure :: initialize_inversion
            procedure :: read_schedule_file
+           procedure :: read_model_array
            procedure :: read_inparam_file
            procedure :: memory_prealloc
         end type sche
@@ -613,6 +622,7 @@
           this%loop_total = 0 ! number of global damping weights
           this%rows_total = 0 ! total number of measurements
           this%mats_total = 0 ! total number of submatrices
+          this%modarr_tot = 0 ! total number of submatrices
           this%nrdamprows = 0 ! default is 0
 
           ! logicals on the type of damping applied
@@ -620,6 +630,13 @@
           this%indamp = .false.
           this%iddamp = .false.
           this%iscale = .false.
+          
+          
+          ! select major mode
+          this%major_mode = 'INVERSION'
+          if (trim(inopts%modarr).ne.'') then
+             this%major_mode = 'MODELARRAY'          
+          end if
           
           ! logicals about synthetic testing
           if (trim(inopts%synth)=='') then
@@ -846,6 +863,33 @@
        end subroutine read_schedule_file
     !========================================================       
 
+
+    !========================================================
+    !
+    !  Read array of model hypothesis to test their misfit
+    !    
+       subroutine read_model_array(this,inopts)
+
+          implicit none
+
+          class(sche):: this          
+          class(opts):: inopts
+
+          PetscInt  ios,i
+          PetscInt, parameter :: fh=16 ! file handler
+          ios = 0
+          open(fh,file=trim(inopts%modarr))
+          this%modarr_tot = 1
+          read(unit=fh,fmt=*,iostat=ios) this%modarr_tot
+          allocate(this%modarr_path(this%modarr_tot))
+          allocate(this%modarr_res(this%modarr_tot,2))
+          call PetscPrintf(PETSC_COMM_WORLD,"SCHEDULER: Reading model array paths\n",ierr)
+          do i=1,this%modarr_tot
+             read(unit=fh,fmt=*,iostat=ios) this%modarr_path(i)
+          end do
+
+       end subroutine read_model_array
+    !========================================================       
 
 
     !========================================================
@@ -1768,7 +1812,7 @@
 
 
     !========================================================
-          subroutine read_synth_model(this,inopts,inmesh,insche)
+          subroutine read_synth_model(this,inopts,inmesh,insche,model)
 
             implicit none
 
@@ -1783,6 +1827,7 @@
             PetscInt,          parameter :: fh=20 ! file handler
             PetscInt                        dummy
             PetscChar(256)                  mode
+            PetscChar(256)                  model
             PetscInt                        ipar,ios
             PetscInt                        npoints,ipoint
             PetscScalar                     lat,lon,dep,xval
@@ -1802,9 +1847,9 @@
 
             if ( this%processor == 0 ) then
 
-               open(fh,file=trim(inopts%synth))               
+               open(fh,file=trim(model))               
                read(unit=fh,fmt=*,iostat=ios) mode
-               call PetscPrintf(PETSC_COMM_WORLD,"    File: "//trim(inopts%synth)// "\n",ierr)
+               call PetscPrintf(PETSC_COMM_WORLD,"    File: "//trim(model)// "\n",ierr)
 
                select case(trim(mode))
 
@@ -2583,6 +2628,7 @@
              procedure, pass :: compute_varr
              procedure, nopass :: sph2cart
              procedure, nopass :: dump_model_ascii
+             procedure, nopass :: dump_modarr_ascii
              procedure, pass :: dump_model_xdmf
              procedure, pass :: dump_run_info
              procedure, pass :: dump_varr
@@ -2937,7 +2983,8 @@
                  trim(int2str(int(insche%dloop(4,irun))))
 
             if (present(idsyn)) then
-               ident_base=trim(inopts%projid)//'_'//trim(idsyn)
+               ident_base=trim(inopts%projid)//'_'//&
+                    trim(int2str(irun))//'_'//trim(idsyn)
                call PetscPrintf(PETSC_COMM_WORLD,"    exporting synthetic input model!\n",ierr)              
             end if
             
@@ -3085,6 +3132,7 @@
           end subroutine dump_run_info
     !========================================================
 
+
     !========================================================
     !   
     !  dumps solution in a simple ascii format
@@ -3132,6 +3180,27 @@
           end subroutine dump_model_ascii
     !========================================================
 
+
+    !========================================================
+    !   
+    !  dumps solution in a simple ascii format
+    !                
+          subroutine dump_modarr_ascii(invec,ident)
+
+            implicit none           
+            PetscScalar,      intent(in) :: invec(:,:)
+            character(len=*), intent(in) :: ident
+            PetscInt nmods,stat,i
+            
+            open(95,file="./results/"//trim(ident),iostat=stat)
+            nmods = size(invec,1)
+            do i=1,nmods               
+               write(95,"(1x,2e15.7,2e15.7)") invec(i,1),invec(i,2)
+            end do
+            close(95)
+          
+          end subroutine dump_modarr_ascii
+    !========================================================
 
 
     !========================================================
@@ -3469,6 +3538,7 @@
      implicit none
 
      PetscScalar outdmy
+     PetscChar(512) ident
 
      type(opts) my_opts ! read the inversion options
      type(mesh) my_mesh ! setup the mesh
@@ -3524,107 +3594,160 @@
       ! read all submatrices from disk
       call my_matr % read_submatrices(my_sche)       
 
-      !********************************
-      ! Major loop over damping values
-      do irun=1,my_sche%loop_total 
+      select case (my_sche%major_mode)
+
+      case ('INVERSION')
+
+         !********************************
+         ! loop over damping values
+         do irun=1,my_sche%loop_total 
+
+            ! Display solver run:
+            call PetscPrintf(PETSC_COMM_WORLD,"\n==============================\n",ierr)
+            call PetscPrintf(PETSC_COMM_WORLD,"RUNNING INVERSION # "&
+                 //trim(int2str(irun))//" of "//trim(int2str(my_sche%loop_total))//"\n",ierr)
+            call PetscPrintf(PETSC_COMM_WORLD,"of type "//trim(my_opts%type)//"\n",ierr)
+            call PetscPrintf(PETSC_COMM_WORLD,"==============================\n\n",ierr)
+
+            ! In case this is not the first irun, restore rhs
+            if (irun>1) call my_matr % restore_rhs()
+
+            ! Apply damping and parameter-scaling if requested
+            call PetscPrintf(PETSC_COMM_WORLD,"\n--- APPLYING DAMPING + SCALING --->\n",ierr)
+
+            ! @TODO: Defer this to a subroutine, ugly to do it manually
+            my_matr%row = my_sche%rows_total ! set running index back to nr of data
+
+            ! Apply damping and parameter-scaling if requested
+            if (my_sche%irdamp) call my_matr % apply_rdamp(my_opts,my_mesh,my_sche,irun) 
+            if (my_sche%indamp) call my_matr % apply_ndamp(my_opts,my_mesh,my_sche,irun) 
+            if (my_sche%iddamp) call my_matr % apply_ddamp(my_opts,my_mesh,my_sche,irun) 
+            if (my_sche%iscale) call my_matr % apply_scale(my_opts,my_mesh,my_sche,irun)          
+
+            ! @TODO: Defer this to a subroutine, ugly to do it manually
+            my_matr%row = my_sche%rows_total ! doing this twice since initializing
+                                           ! postproc may modify it
+
+            ! Assemble the matrix
+            call PetscPrintf(PETSC_COMM_WORLD,"\n--- ASSEMBLING MATRIX --->\n",ierr)
+            call my_matr % assemble_matrix()
+
+            ! In case this is the first run, store rhs
+            if (irun==1) call my_matr % store_rhs()   
+
+            ! Compute synthetic rhs vector
+            if (my_sche%isynth) then
+               call PetscPrintf(PETSC_COMM_WORLD,"\n--- COMPUTING SYNTHETICS --->\n",ierr)
+               ! In case of first run, dump synthetic input model
+               if (irun==1) then               
+                  call my_matr % read_synth_model(my_opts,my_mesh,my_sche,my_opts%synth) ! @ TODO: why do I re-read the synthetic model
+                  call my_post % initialize_postproc(my_opts,my_matr,my_mesh,my_sche,my_matr%x_synth) ! @ TODO: Can't i just initialize it at one loc?
+                  call my_post % reparam_solution(my_opts,my_matr,my_mesh,my_sche) ! reparameterize input synthetic model
+                  call my_post % export_solution(my_opts,my_matr,my_mesh,my_sche,irun,'synth_input') ! dump input synthetic model
+               end if
+               call my_matr % assemble_matrix() ! Need to reassemble matrices and vectors
+               call my_matr % compute_adotx(my_matr%x_synth,my_matr%b,my_matr%mask_dmp) ! compute rhs vector
+            end if
+
+            ! Solve the system
+            call PetscPrintf(PETSC_COMM_WORLD,"\n--- SOLVING Ax=b --->\n",ierr)
+            call my_solv % solve_system(my_matr,my_opts)
+
+            ! Postprocessing: reparameterize and compute VARRED and ROUGHNESS
+            call PetscPrintf(PETSC_COMM_WORLD,"\n--- POSTPROCESSING --->\n",ierr)
+
+            ! First time reqiures recomputing of the damping matrix, and takes longer
+            call my_post % initialize_postproc(my_opts,my_matr,my_mesh,my_sche)
+            
+            ! Extract some information for inversion run
+            call my_post % save_iterations(my_solv,irun)
+            call my_post % compute_norm(my_matr,irun)
+            
+            ! Compute model roughness
+            call my_matr % apply_rdamp(my_opts,my_mesh,my_sche,0)  ! irun 0 to get unweighted operator
+            call my_matr % assemble_matrix() ! Need to reassemble matrices and vectors
+            call my_post % compute_rough(my_matr,irun)
+
+            ! Compute global variamce reduction
+            call my_post % compute_varr(my_matr,my_sche,0,&
+                 my_sche%rows_total,my_post%varr_cumm(irun))
+
+            ! Compute grouped variance reductions
+            if (my_opts%gvarr) then
+               call PetscPrintf(PETSC_COMM_WORLD,"    computing grouped varr!\n",ierr)            
+               do imat=1,my_sche%mats_total
+                  call my_post % compute_varr(my_matr,my_sche,&
+                                              my_sche%fromto_info(imat,1),&
+                                              my_sche%fromto_info(imat,2),&
+                                              my_post%varr(imat,irun))
+               end do
+            end if
+         
+            ! Reparameterize and export solution
+            call my_post % reparam_solution(my_opts,my_matr,my_mesh,my_sche)
+            call my_post % export_solution(my_opts,my_matr,my_mesh,my_sche,irun) ! also dums varr
+
+         end do
+         !*******************************
+
+         call PetscPrintf(PETSC_COMM_WORLD,"\n==============================\n",ierr)
+         call PetscPrintf(PETSC_COMM_WORLD,"FINALIZING INVERSION\n",ierr)
+         call PetscPrintf(PETSC_COMM_WORLD,"==============================\n\n",ierr)
+         if ( my_matr%processor == 0) call my_post % dump_run_info(my_sche,my_opts)
+         
+         ! Free work space.
+         call my_post % destroy_postproc()         
+         call my_solv % destroy_solver()
+         call my_matr % destroy_matrix()
+
+      case ('MODELARRAY')
 
          ! Display solver run:
          call PetscPrintf(PETSC_COMM_WORLD,"\n==============================\n",ierr)
-         call PetscPrintf(PETSC_COMM_WORLD,"RUNNING INVERSION # "&
-              //trim(int2str(irun))//" of "//trim(int2str(my_sche%loop_total))//"\n",ierr)
-         call PetscPrintf(PETSC_COMM_WORLD,"of type "//trim(my_opts%type)//"\n",ierr)
+         call PetscPrintf(PETSC_COMM_WORLD,"RUNNING MODEL ARRAY MISFIT TEST  "&
+              //" on "//trim(my_opts%modarr)//"\n",ierr)
          call PetscPrintf(PETSC_COMM_WORLD,"==============================\n\n",ierr)
-
-         ! In case this is not the first irun, restore rhs
-         if (irun>1) call my_matr % restore_rhs()
-
-         ! Apply damping and parameter-scaling if requested
-         call PetscPrintf(PETSC_COMM_WORLD,"\n--- APPLYING DAMPING + SCALING --->\n",ierr)
-
-         ! @TODO: Defer this to a subroutine, ugly to do it manually
-         my_matr%row = my_sche%rows_total ! set running index back to nr of data
-
-         ! Apply damping and parameter-scaling if requested
-         if (my_sche%irdamp) call my_matr % apply_rdamp(my_opts,my_mesh,my_sche,irun) 
-         if (my_sche%indamp) call my_matr % apply_ndamp(my_opts,my_mesh,my_sche,irun) 
-         if (my_sche%iddamp) call my_matr % apply_ddamp(my_opts,my_mesh,my_sche,irun) 
-         if (my_sche%iscale) call my_matr % apply_scale(my_opts,my_mesh,my_sche,irun)          
-
-         ! @TODO: Defer this to a subroutine, ugly to do it manually
-         my_matr%row = my_sche%rows_total ! doing this twice since initializing
-                                          ! postproc may modify it
-
-         ! Assemble the matrix
-         call PetscPrintf(PETSC_COMM_WORLD,"\n--- ASSEMBLING MATRIX --->\n",ierr)
-         call my_matr % assemble_matrix()
-
-         ! In case this is the first run, store rhs
-         if (irun==1) call my_matr % store_rhs()   
-
-         ! Compute synthetic rhs vector
-         if (my_sche%isynth) then
-            call PetscPrintf(PETSC_COMM_WORLD,"\n--- COMPUTING SYNTHETICS --->\n",ierr)
-            ! In case of first run, dump synthetic input model
-            if (irun==1) then               
-               call my_matr % read_synth_model(my_opts,my_mesh,my_sche) ! @ TODO: why do I re-read the synthetic model
-               call my_post % initialize_postproc(my_opts,my_matr,my_mesh,my_sche,my_matr%x_synth) ! @ TODO: Can't i just initialize it at one loc?
-               call my_post % reparam_solution(my_opts,my_matr,my_mesh,my_sche) ! reparameterize input synthetic model
-               call my_post % export_solution(my_opts,my_matr,my_mesh,my_sche,irun,'synth_input') ! dump input synthetic model
-            end if
-            call my_matr % assemble_matrix() ! Need to reassemble matrices and vectors
-            call my_matr % compute_adotx(my_matr%x_synth,my_matr%b,my_matr%mask_dmp) ! compute rhs vector
-         end if
-
-         ! Solve the system
-         call PetscPrintf(PETSC_COMM_WORLD,"\n--- SOLVING Ax=b --->\n",ierr)
-         call my_solv % solve_system(my_matr,my_opts)
-
-         ! Postprocessing: reparameterize and compute VARRED and ROUGHNESS
-         call PetscPrintf(PETSC_COMM_WORLD,"\n--- POSTPROCESSING --->\n",ierr)
-
-         ! First time reqiures recomputing of the damping matrix, and takes longer
-         call my_post % initialize_postproc(my_opts,my_matr,my_mesh,my_sche)
-
-         ! Extract some information for inversion run
-         call my_post % save_iterations(my_solv,irun)
-         call my_post % compute_norm(my_matr,irun)
-
-         ! Compute model roughness
+         
+         ! Read array of models
+         call my_sche % read_model_array(my_opts)
          call my_matr % apply_rdamp(my_opts,my_mesh,my_sche,0)  ! irun 0 to get unweighted operator
          call my_matr % assemble_matrix() ! Need to reassemble matrices and vectors
-         call my_post % compute_rough(my_matr,irun)
 
-         ! Compute global variamce reduction
-         call my_post % compute_varr(my_matr,my_sche,0,&
-              my_sche%rows_total,my_post%varr_cumm(irun))
+         ! Loop over model array
+         do irun=1,my_sche%modarr_tot
 
-         ! Compute grouped variance reductions
-         if (my_opts%gvarr) then
-            call PetscPrintf(PETSC_COMM_WORLD,"    computing grouped varr!\n",ierr)            
-            do imat=1,my_sche%mats_total
-               call my_post % compute_varr(my_matr,my_sche,&
-                                          my_sche%fromto_info(imat,1),&
-                                          my_sche%fromto_info(imat,2),&
-                                          my_post%varr(imat,irun))
-            end do
-         end if
-         
-         ! Reparameterize and export solution
-         call my_post % reparam_solution(my_opts,my_matr,my_mesh,my_sche)
-         call my_post % export_solution(my_opts,my_matr,my_mesh,my_sche,irun) ! also dums varr
+            ! Read synthetic model
+            call PetscPrintf(PETSC_COMM_WORLD,"\n--- Testing model # "//trim(int2str(irun))//&
+                 " of "//trim(int2str(my_sche%modarr_tot))//"--->\n",ierr)
+            call my_matr % read_synth_model(my_opts,my_mesh,my_sche,my_sche%modarr_path(irun)) ! @ TODO: why do I re-read the synthetic model
+            call my_post % initialize_postproc(my_opts,my_matr,my_mesh,my_sche,my_matr%x_synth) ! x_synth is copied over to x!
+            call my_post % reparam_solution(my_opts,my_matr,my_mesh,my_sche) ! reparameterize input synthetic model
+            call my_post % export_solution(my_opts,my_matr,my_mesh,my_sche,irun,"model_array") !mp input synthetic model
 
-      end do
-      !*******************************
+            ! Compute model roughness, norm, varr
+            call my_post % compute_norm(my_matr,1) ! just temporarily saving in irun 1
+            call my_post % compute_rough(my_matr,1) ! just temporarily saving in irun 1
+            call my_post % compute_varr(my_matr,my_sche,0,&
+                           my_sche%rows_total,my_post%varr_cumm(1)) ! just temporarily saving in irun 1
 
-      call PetscPrintf(PETSC_COMM_WORLD,"\n==============================\n",ierr)
-      call PetscPrintf(PETSC_COMM_WORLD,"FINALIZING INVERSION\n",ierr)
-      call PetscPrintf(PETSC_COMM_WORLD,"==============================\n\n",ierr)
-      if ( my_matr%processor == 0) call my_post % dump_run_info(my_sche,my_opts)
-      
-      ! Free work space.
-      call my_post % destroy_postproc()         
-      call my_solv % destroy_solver()
-      call my_matr % destroy_matrix()
+            ! Store results in temporary array
+            my_sche%modarr_res(irun,1)=my_post%varr_cumm(1)
+            my_sche%modarr_res(irun,2)=my_post%rough_nrm(1)
+
+         end do
+
+         call PetscPrintf(PETSC_COMM_WORLD,"\n==============================\n",ierr)
+         call PetscPrintf(PETSC_COMM_WORLD,"FINALIZING MISFIT TEST\n",ierr)
+         call PetscPrintf(PETSC_COMM_WORLD,"==============================\n\n",ierr)
+
+         call my_post % dump_modarr_ascii(my_sche%modarr_res,trim(my_opts%projid)//'_modelarray_misfits.dat')       
+
+         ! Free work space.
+         call my_post % destroy_postproc()         
+         call my_matr % destroy_matrix()
+
+      end select
+
 
       if (verbosity > 1) then
          ! Display amount of memory used
