@@ -2,10 +2,9 @@
 
 # Solves precomputed tomography matrices using our new petsc solver
 
-mpirun -n 1 ./petscinv \
+mpirun -n 6 ./petscinv \
     -matrix_schedule 'samples/schedule' \
     -inparam_file 'samples/inparam' \
-    -varr_model_array 'samples/model_array.in' \
     -inversion_parameters 'vsh,vsv' \
     -reference_model 'prem_ani' \
     -number_of_layers 21 \
