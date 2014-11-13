@@ -883,9 +883,9 @@
           read(unit=fh,fmt=*,iostat=ios) this%modarr_tot
           allocate(this%modarr_path(this%modarr_tot))
           allocate(this%modarr_res(this%modarr_tot,2))
-          call PetscPrintf(PETSC_COMM_WORLD,"SCHEDULER: Reading model array paths\n",ierr)
           do i=1,this%modarr_tot
              read(unit=fh,fmt=*,iostat=ios) this%modarr_path(i)
+             call PetscPrintf(PETSC_COMM_WORLD,"SCHEDULER: Reading model path "//trim(this%modarr_path(i))//"\n",ierr)
           end do
 
        end subroutine read_model_array
@@ -2036,6 +2036,7 @@
                   !
 
                   do ipar=1,inmesh%blocks_all_param
+                     !print*,ipar
                      read(unit=fh,fmt=*,iostat=ios) dummy,xval            
                      call VecSetValue(this%x_synth,ipar-1,&
                           xval/100.d0,INSERT_VALUES,ierr)
@@ -2717,6 +2718,7 @@
             ! This second initialization part is 
             ! repeated after each inversion run
             if ( inmatr%processor == 0 ) then
+
                ! @TODO, I didn't find a better way to collect my
                ! result from the PETSc vector object, this can be
                ! done more elegantly, for sure
@@ -3708,7 +3710,6 @@
               //" on "//trim(my_opts%modarr)//"\n",ierr)
          call PetscPrintf(PETSC_COMM_WORLD,"==============================\n\n",ierr)
          
-         ! Read array of models
          call my_sche % read_model_array(my_opts)
          call my_matr % apply_rdamp(my_opts,my_mesh,my_sche,0)  ! irun 0 to get unweighted operator
          call my_matr % assemble_matrix() ! Need to reassemble matrices and vectors
@@ -3719,6 +3720,7 @@
             ! Read synthetic model
             call PetscPrintf(PETSC_COMM_WORLD,"\n--- Testing model # "//trim(int2str(irun))//&
                  " of "//trim(int2str(my_sche%modarr_tot))//"--->\n",ierr)
+                      
             call my_matr % read_synth_model(my_opts,my_mesh,my_sche,my_sche%modarr_path(irun)) ! @ TODO: why do I re-read the synthetic model
             call my_post % initialize_postproc(my_opts,my_matr,my_mesh,my_sche,my_matr%x_synth) ! x_synth is copied over to x!
             call my_post % reparam_solution(my_opts,my_matr,my_mesh,my_sche) ! reparameterize input synthetic model
