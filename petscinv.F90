@@ -882,7 +882,7 @@
           this%modarr_tot = 1
           read(unit=fh,fmt=*,iostat=ios) this%modarr_tot
           allocate(this%modarr_path(this%modarr_tot))
-          allocate(this%modarr_res(this%modarr_tot,2))
+          allocate(this%modarr_res(this%modarr_tot,3))
           do i=1,this%modarr_tot
              read(unit=fh,fmt=*,iostat=ios) this%modarr_path(i)
              call PetscPrintf(PETSC_COMM_WORLD,"SCHEDULER: Reading model path "//trim(this%modarr_path(i))//"\n",ierr)
@@ -3197,7 +3197,7 @@
             open(95,file="./results/"//trim(ident),iostat=stat)
             nmods = size(invec,1)
             do i=1,nmods               
-               write(95,"(1x,2e15.7,2e15.7)") invec(i,1),invec(i,2)
+               write(95,"(1x,2e15.7,2e15.7,2e15.7)") invec(i,1),invec(i,2),invec(i,3)
             end do
             close(95)
           
@@ -3735,6 +3735,7 @@
             ! Store results in temporary array
             my_sche%modarr_res(irun,1)=my_post%varr_cumm(1)
             my_sche%modarr_res(irun,2)=my_post%rough_nrm(1)
+            my_sche%modarr_res(irun,3)=my_post%rough_abs(1)
 
          end do
 
