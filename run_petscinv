@@ -9,7 +9,7 @@ mpirun -n 6 ./petscinv \
     -reference_model 'prem_ani' \
     -number_of_layers 21 \
     -equatorial_increment 5.0 \
-    -project_id 'INV01' \
+    -project_id 'my_inversion' \
     -output_format 'ascii' \
     -solution_type 'normal' \
     -ksp_monitor \
