@@ -10,7 +10,7 @@ mpirun -n 6 ./petscinv \
     -number_of_layers 21 \
     -equatorial_increment 5.0 \
     -project_id 'my_inversion' \
-    -output_format 'ascii' \
+    -output_format 'ascii_rtpv' \
     -solution_type 'normal' \
     -ksp_monitor \
     -grouped_varr \
@@ -32,8 +32,9 @@ mpirun -n 6 ./petscinv \
 #   can either read models parameterized in the actual tomography
 #   parameterization or as pointclouds
 #   -synthetic_model 'samples/synth.pcn' \
-#   -synthetic_model 'samples/synth_pointcloud.pcn' \
+#   -synthetic_model 'samples/synth_rtpv.pcn' \
 #   -synthetic_model 'samples/synth_checkerboard.pcn' \
+
 #
 # * You can also just test variance reduction using a synthetic
 #   input model, as a simple hypothesis test using
@@ -66,5 +67,7 @@ mpirun -n 6 ./petscinv \
 # * In the case of -type 'normal' please try different solvers
 #   as gmres, bicg, cg, symmlq, minres using -ksp_type *
 #
-
+# * In case you want to use a 3D reference model, add the following
+#   you need a file regions in the same folder
+#   -reference_model './samples/prem_ani_crust_2.0/' \
 

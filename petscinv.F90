@@ -12,7 +12,7 @@
 !
 !  Compile with "make" and run with "./run_petscinv""
 !
-!  Copyright (c) 2013 - 2014 Ludwig Auer, ludwig.auer@tomo.ig.erdw.ethz.ch
+!  Copyright (c) 2013 - 2015 Ludwig Auer, ludwig.auer@tomo.ig.erdw.ethz.ch
 !
 !  ------------------------------------------------------------------------- 
 
@@ -269,58 +269,58 @@
     !
     !   procedure to initialize a new mesh
     !
-        subroutine setup_mesh(this,options)
+        subroutine setup_mesh(this,inopts)
           
           implicit none
           class(mesh) :: this
-          class(opts) :: options
+          class(opts) :: inopts
 
           ! Local variables
           PetscBool                       exist
           PetscInt                        i,j          
 
           ! Allocate memory
-          allocate ( this%blocks_per_layer( options%nlays ) )
-          allocate ( this%levels( n0max , options%nlays ) )
-          allocate ( this%xlamin( n0max , options%nlays ) )
-          allocate ( this%xlamax( n0max , options%nlays ) )
-          allocate ( this%xlomin( n0max , options%nlays ) )
-          allocate ( this%xlomax( n0max , options%nlays ) )
-          allocate ( this%radmin( n0max , options%nlays ) )
-          allocate ( this%radmax( n0max , options%nlays ) )
-          allocate ( this%locent( n0max , options%nlays ) )
-          allocate ( this%lacent( n0max , options%nlays ) )
+          allocate ( this%blocks_per_layer( inopts%nlays ) )
+          allocate ( this%levels( n0max , inopts%nlays ) )
+          allocate ( this%xlamin( n0max , inopts%nlays ) )
+          allocate ( this%xlamax( n0max , inopts%nlays ) )
+          allocate ( this%xlomin( n0max , inopts%nlays ) )
+          allocate ( this%xlomax( n0max , inopts%nlays ) )
+          allocate ( this%radmin( n0max , inopts%nlays ) )
+          allocate ( this%radmax( n0max , inopts%nlays ) )
+          allocate ( this%locent( n0max , inopts%nlays ) )
+          allocate ( this%lacent( n0max , inopts%nlays ) )
           allocate ( this%nsqrs_tot( nlmax ) ) ! 180/0.625
           allocate ( this%nsqrs( nlmax ) ) ! 180/0.625
           
           ! Initialize more mesh params
-          this%eqinc = options%eqinc
-          this%adapt = options%adapt
-          this%nlays = options%nlays
-          this%eqinc_ref = options%eqinc_ref
+          this%eqinc = inopts%eqinc
+          this%adapt = inopts%adapt
+          this%nlays = inopts%nlays
+          this%eqinc_ref = inopts%eqinc_ref
           this%blocks_per_layer(:) = 0
           this%blocks_per_param    = 0
 
           ! Select between variable and regular mesh
-          select case ( options%adapt )
+          select case ( inopts%adapt )
           case (.true.)
 
              call PetscPrintf(PETSC_COMM_WORLD,&
                   "MESHER: Reading mesh from disk\n",ierr)
-             inquire ( file=options%grdin, exist=exist)
+             inquire ( file=inopts%grdin, exist=exist)
              if (.not. exist) then
                 call PetscPrintf(PETSC_COMM_WORLD,&
                      "**** MESHER CRASHED **** : You didn't\
                       provide me with a grid info file!\n",ierr)
                 stop
              end if
-             call this%read_mesh(options%grdin)
+             call this%read_mesh(inopts%grdin)
 
           case (.false.)
              ! Generate a new grid based on eqincr
              call PetscPrintf(PETSC_COMM_WORLD,&
                   "MESHER: Generating mesh on the fly!\n",ierr)
-             if ( options%eqinc.le.0.d5 ) then
+             if ( inopts%eqinc.le.0.d5 ) then
                 call PetscPrintf(PETSC_COMM_WORLD,&
                      "**** MESHER CRASHED ****: You didn't\
                       provide me with a valid eqincr value!\n",ierr)
@@ -330,10 +330,10 @@
           end select
 
           call PetscPrintf(PETSC_COMM_WORLD,"MESHER: Matrices are computed for "//&
-               trim(int2str(options%npars))//" parameters\n",ierr)
+               trim(int2str(inopts%npars))//" parameters\n",ierr)
 
           this%blocks_all_param = this%blocks_per_param*&
-                                  options%npars   
+                                  inopts%npars   
                     
         end subroutine setup_mesh
     !========================================================
@@ -576,6 +576,7 @@
            PetscBool        indamp
            PetscBool        iddamp
            PetscBool        iscale
+           PetscBool        i3dref
            PetscBool        isynth
            PetscChar(256)   major_mode
            PetscChar(256)   inpar_file
@@ -588,15 +589,11 @@
            PetscScalar,     allocatable :: dloop(:,:)
            PetscInt,        allocatable :: prealloc(:) 
            PetscScalar,     allocatable :: meta_info(:,:)
-           PetscInt,        allocatable :: fromto_info(:,:)
            character(500),  allocatable :: path_info(:,:)
-           character(500),  allocatable :: modarr_path(:)
-           PetscScalar,     allocatable :: modarr_res(:,:)     
-           PetscInt         modarr_tot       
+           PetscInt,        allocatable :: fromto_info(:,:)
          contains
            procedure :: initialize_inversion
            procedure :: read_schedule_file
-           procedure :: read_model_array
            procedure :: read_inparam_file
            procedure :: memory_prealloc
         end type sche
@@ -622,7 +619,6 @@
           this%loop_total = 0 ! number of global damping weights
           this%rows_total = 0 ! total number of measurements
           this%mats_total = 0 ! total number of submatrices
-          this%modarr_tot = 0 ! total number of submatrices
           this%nrdamprows = 0 ! default is 0
 
           ! logicals on the type of damping applied
@@ -630,7 +626,7 @@
           this%indamp = .false.
           this%iddamp = .false.
           this%iscale = .false.
-          
+          this%i3dref = .false.
           
           ! select major mode
           this%major_mode = 'INVERSION'
@@ -645,17 +641,18 @@
              this%isynth = .true.
           end if
 
+          ! is the reference model 3D?
+          inquire(file=trim(inopts%refmod)//"/regions.dat", exist=this%i3dref)
+
           ! allocate submatrix and damping schedule
           allocate ( this%rdamp( inopts%nlays, npmax+1 ) )
           allocate ( this%ndamp( inopts%nlays, npmax ) )
           allocate ( this%ddamp( inopts%nlays, 2 ) )
           allocate ( this%scale( inopts%nlays, 3 ) )
           allocate ( this%layer( inopts%nlays+1 ) )
-
           allocate ( this%path_info( matmx, 4 ) )
           allocate ( this%meta_info( matmx, 4 ) )
           allocate ( this%fromto_info( matmx, 2 ) )
-
           allocate ( this%dloop( 4, dmpmx ) )
 
           ! read damping and matrix schedules
@@ -863,33 +860,6 @@
        end subroutine read_schedule_file
     !========================================================       
 
-
-    !========================================================
-    !
-    !  Read array of model hypothesis to test their misfit
-    !    
-       subroutine read_model_array(this,inopts)
-
-          implicit none
-
-          class(sche):: this          
-          class(opts):: inopts
-
-          PetscInt  ios,i
-          PetscInt, parameter :: fh=16 ! file handler
-          ios = 0
-          open(fh,file=trim(inopts%modarr))
-          this%modarr_tot = 1
-          read(unit=fh,fmt=*,iostat=ios) this%modarr_tot
-          allocate(this%modarr_path(this%modarr_tot))
-          allocate(this%modarr_res(this%modarr_tot,3))
-          do i=1,this%modarr_tot
-             read(unit=fh,fmt=*,iostat=ios) this%modarr_path(i)
-             call PetscPrintf(PETSC_COMM_WORLD,"SCHEDULER: Reading model path "//trim(this%modarr_path(i))//"\n",ierr)
-          end do
-
-       end subroutine read_model_array
-    !========================================================       
 
 
     !========================================================
@@ -1830,7 +1800,7 @@
             PetscChar(256)                  model
             PetscInt                        ipar,ios
             PetscInt                        npoints,ipoint
-            PetscScalar                     lat,lon,dep,xval
+            PetscScalar                     rad,lat,lon,dep,xval
             PetscInt                        i,j,k,h,l,u
             PetscInt                        row_petsc
             PetscBool                       foundlay
@@ -1937,18 +1907,14 @@
                   deallocate(switch_facts)                 
                   deallocate(valtot)
 
-               case ('POINTCLOUD')
+               case ('RTPV')
 
                   !
-                  ! Pointcloud model files have the following format
+                  ! RTPV model files have the following format
                   !
-                  ! POINTCLOUD # mode in first line
+                  ! RTPV # mode in first line
                   ! 1000000    # number of points per parameter
-                  !  1.275     # npar*npoints model coefficinets in %
-                  !  1.556
-                  !  0.988
-                  ! -0.899
-                  ! ...
+                  !  radius theta/lon[deg] phi/lat[deg] value[%]
                   !
 
                   allocate(numper(n0max,inopts%nlays))
@@ -1967,15 +1933,16 @@
                      do ipoint=1,npoints
 
                         ! Read point
-                        read(unit=fh,fmt=*,iostat=ios) lat,lon,dep,xval
+                        read(unit=fh,fmt=*,iostat=ios) rad,lon,lat,xval
+                        dep=6371.d0-rad
+
 
                         ! Shift grid
-                        lon=lon+360.d0 
-                        if (lon.gt.(359.60)) lon=lon-360.d0 
+                        !lon=lon+360.d0 
+                        !if (lon.gt.(359.60)) lon=lon-360.d0 
 
                         ! In which layer are we
                         foundlay=.false.
-
                         do h=1,inmesh%nlays
                            if((dep.gt.insche%layer(h)).and.&
                                 (dep.le.insche%layer(h+1)))then
@@ -2009,8 +1976,8 @@
                      row_petsc=(u-1)*inmesh%blocks_per_param
                      do j=1,inmesh%nlays
                         do k=1,inmesh%blocks_per_layer(j)
+                           !print*,"Yoo,",j,valtot(k,j),numper(k,j),valtot(k,j)/numper(k,j)
                            valtot(k,j)=valtot(k,j)/numper(k,j)
-                           ! print*,valtot(k,j)
                            call VecSetValue(this%x_synth,row_petsc,&
                                 valtot(k,j)/100.d0,INSERT_VALUES,ierr)
                            row_petsc=row_petsc+1
@@ -2018,6 +1985,7 @@
                      enddo
 
                   end do ! end of loop over npar
+
 
                   deallocate(numper)
                   deallocate(valtot)
@@ -2250,11 +2218,27 @@
 !
         module module_bgmod
 
+          use module_options
+          use module_schedule
+          use module_matrix
           use global_param     
+          use module_mesh
 
           implicit none
 
           type,public :: back
+
+             PetscScalar,   allocatable :: ref3d_vsh_invmesh(:,:)
+             PetscScalar,   allocatable :: ref3d_vsv_invmesh(:,:)
+             PetscScalar,   allocatable :: ref3d_vph_invmesh(:,:)
+             PetscScalar,   allocatable :: ref3d_vpv_invmesh(:,:)
+
+             PetscScalar,   allocatable :: ref3d_vsh(:,:)
+             PetscScalar,   allocatable :: ref3d_vsv(:,:)
+             PetscScalar,   allocatable :: ref3d_vph(:,:)
+             PetscScalar,   allocatable :: ref3d_vpv(:,:)
+             PetscScalar,   allocatable :: refmesh(:,:)
+
              PetscScalar      rho
              PetscScalar      vph
              PetscScalar      vpv
@@ -2262,20 +2246,507 @@
              PetscScalar      vsv
              PetscScalar      qka
              PetscScalar      qmu
+
+             character(500),  allocatable :: modarr_path(:)
+             PetscScalar,     allocatable :: modarr_res(:,:)     
+             PetscInt         modarr_tot,npix,ndep
+
            contains
-             procedure, pass :: get_model_coeff
-             procedure, pass :: get_model_coeff_aver
+
+             procedure, pass :: get_model_coeff_1d
+             procedure, pass :: get_model_coeff_aver_1d
+             procedure, pass :: read_3d_reference_model
+             procedure, pass :: setup_model_array
              procedure, nopass :: get_idom
              procedure, nopass :: prem_ani
+
           end type back
 
         contains
+
+
+
+    !========================================================
+    !
+    !  Read array of model hypothesis to test their misfit
+    !    
+          subroutine setup_model_array(this,inopts,insche,inmesh,inmatr)
+            
+            implicit none
+            
+            class(back):: this          
+            class(opts):: inopts
+            class(sche):: insche
+            class(mesh):: inmesh
+            class(matr):: inmatr
+            
+            PetscInt  ios,i,j,k,ln
+            PetscInt, parameter :: fh=16 ! file handler
+            PetscInt, parameter :: fb=17 ! file handler
+            PetscInt, parameter :: fc=18 ! file handler
+            PetscInt, parameter :: fd=19 ! file handler
+            PetscInt, parameter :: fg=20 ! file handler
+            PetscInt, parameter :: fx=21 ! file handler
+
+            PetscInt, parameter :: exclude=0 ! file handler
+                                                                    
+            PetscScalar, allocatable :: ages(:,:)
+            PetscScalar, allocatable :: locent(:)
+            PetscScalar, allocatable :: lacent(:)
+            
+            PetscScalar, allocatable :: ref3d_vsh_agegrid(:,:)
+            PetscScalar, allocatable :: ref3d_vsv_agegrid(:,:)
+            PetscScalar, allocatable :: ref3d_vs_agegrid(:,:)
+
+            PetscScalar, allocatable :: dlnvs(:,:)
+            PetscScalar, allocatable :: xayin(:,:)
+            PetscScalar, allocatable :: valtot_dlnvsh(:,:)
+            PetscScalar, allocatable :: valtot_dlnvsv(:,:)        
+            PetscScalar, allocatable :: valtot_xi(:,:)        
+            PetscInt, allocatable :: numper(:)
+            PetscInt, allocatable :: indper(:)
+            
+
+            PetscScalar coeff_vsv,coeff_vsh,nn
+            PetscInt top,bot,yoo
+            
+            PetscChar(2)   nlaychar
+            PetscChar(10)  hypo_type
+            PetscChar(10)  dummy
+            PetscChar(256) age_file,iso_fold,out_fold,ani_fold,fname
+            PetscScalar hh,xx,zz,hs,hi,xs,xi,zs,zi
+            PetscInt h,x,z,u,l
+            PetscInt hn,xn,zn,nlon,nlat,nage
+            PetscScalar age_incr,radius,depth
+            PetscScalar vs,xay,vsh,vsv,dlnvsv,dlnvsh
+            
+
+            if ( inmatr%processor == 0 ) then
+
+            ios = 0
+            open(fh,file=trim(inopts%modarr))
+            read(unit=fh,fmt=*,iostat=ios) this%modarr_tot
+            
+            ! read model array from disk
+            if (this%modarr_tot.gt.0) then
+               allocate(this%modarr_path(this%modarr_tot))
+               allocate(this%modarr_res(this%modarr_tot,3))
+               
+               do i=1,this%modarr_tot
+                  read(unit=fh,fmt=*,iostat=ios) this%modarr_path(i)
+                  call PetscPrintf(PETSC_COMM_WORLD,"SCHEDULER: Reading model path "//&
+                       trim(this%modarr_path(i))//"\n",ierr)
+               end do
+               
+            ! setup models and associated model array on the fly
+            else if (this%modarr_tot.eq.0) then
+               
+               allocate(valtot_dlnvsh(n0max,inopts%nlays))
+               allocate(valtot_dlnvsv(n0max,inopts%nlays))
+               allocate(valtot_xi(n0max,inopts%nlays))
+
+               allocate(this%modarr_path(10000))
+               allocate(this%modarr_res(10000,3))
+
+               this%modarr_tot=0               
+               
+               ! read wether LAY or SQRT
+               read(unit=fh,fmt=*,iostat=ios) hypo_type
+               read(unit=fh,fmt=*,iostat=ios) age_incr
+               read(unit=fh,fmt=*,iostat=ios) age_file
+               read(unit=fh,fmt=*,iostat=ios) iso_fold
+               read(unit=fh,fmt=*,iostat=ios) ani_fold
+               read(unit=fh,fmt=*,iostat=ios) out_fold
+               
+               if (trim(hypo_type).eq.'LAY') then
+                  
+                  read(unit=fh,fmt=*,iostat=ios) dummy,hs,hi,hn
+                  read(unit=fh,fmt=*,iostat=ios) dummy,zs,zi,zn
+                  read(unit=fh,fmt=*,iostat=ios) dummy,xs,xi,xn                  
+                  open(fb,file=trim(age_file))
+                  
+                  nlon=int(360.d0/age_incr)
+                  nlat=int(180.d0/age_incr)
+                  
+                  allocate(ages(nlon*nlat,3))
+                  allocate(locent(nlon*nlat))
+                  allocate(lacent(nlon*nlat))
+                  
+                  allocate(ref3d_vsh_agegrid(nlon*nlat,inmesh%nlays))
+                  allocate(ref3d_vsv_agegrid(nlon*nlat,inmesh%nlays))
+                  allocate(ref3d_vs_agegrid(nlon*nlat,inmesh%nlays))
+                  
+                  allocate(numper(inmesh%blocks_per_layer(1)))
+                  allocate(indper(nlon*nlat))
+                  
+                  do i=1,inmesh%nlays
+                     print*,"Setting up 1x1 degree reference model, layer:",i,nlon*nlat
+                     do j=1,nlon*nlat
+                        if (i.eq.1) read(unit=fb,fmt=*,iostat=ios) ages(j,:)
+                        nn = 0.d0
+                        coeff_vsv = 0.d0
+                        coeff_vsh = 0.d0
+                        lacent(j) = ages(j,2)-age_incr/2.d0
+                        locent(j) = ages(j,1)+age_incr/2.d0
+                        do k=1,this%npix
+                           if((lacent(j).ge.this%refmesh(k,4)).and.&
+                              (lacent(j).le.this%refmesh(k,3)).and.&
+                              (locent(j).le.this%refmesh(k,5)).and.&
+                              (locent(j).ge.this%refmesh(k,6))) then
+                              top=int(insche%layer(i))
+                              ! Exclude the water layer and shallow sediments
+                              if (top.lt.exclude) top = exclude
+                              if (top.eq.0) top = 1
+                              bot=int(insche%layer(i+1))
+                              do u=top,bot
+                                 radius = r_earth - float(u)
+                                 coeff_vsv = coeff_vsv + this%ref3d_vsv(k,int(radius))
+                                 coeff_vsh = coeff_vsh + this%ref3d_vsh(k,int(radius))
+                                 nn = nn + 1.d0
+                              end do
+                              ref3d_vsv_agegrid(j,i) = coeff_vsv / nn
+                              ref3d_vsh_agegrid(j,i) = coeff_vsh / nn
+                              ref3d_vs_agegrid(j,i) = dsqrt ( ( 2.d0 * ref3d_vsv_agegrid(j,i)**2 + &
+                                   ref3d_vsh_agegrid(j,i)**2 ) / 3.d0)
+                              exit
+                           end if
+                        end do
+                        ! for each pixel, figure out which pixels in the 
+                        ! inversion grid they contribute to, only need to
+                        ! do this once for the first layer
+                        if (i.eq.1) then
+                           do l=1,inmesh%blocks_per_layer(1)
+                              if ((locent(j).ge.inmesh%xlomin(l,1)).and.&
+                                  (locent(j).le.inmesh%xlomax(l,1)).and.&
+                                  (lacent(j).ge.inmesh%xlamin(l,1)).and.&
+                                  (lacent(j).le.inmesh%xlamax(l,1))) then
+                                 numper(l)=numper(l)+1
+                                 indper(j)=l                              
+                                 exit
+                              end if
+                           end do
+                        end if
+                     end do
+                  end do
+                  close(fb)
+!                  print*,numper
+!                  print*,indper
+                  
+                  ! read isotropic and continental xi background models
+                  allocate(dlnvs(nlon*nlat,inmesh%nlays))
+                  allocate(xayin(nlon*nlat,inmesh%nlays))
+                  do i=1,inmesh%nlays
+                     print*,"Reading dln(vs) and Xi background model, layer:",i
+                     do j=1,nlon*nlat                                                       
+                        write(nlaychar,"(i2.2)") i
+                        open(fc,file=trim(iso_fold)//"/layer_"//nlaychar)
+                        open(fd,file=trim(ani_fold)//"/layer_"//nlaychar)                            
+                        read(unit=fc,fmt=*,iostat=ios) dummy,dummy,dlnvs(j,i)
+                        read(unit=fd,fmt=*,iostat=ios) dummy,dummy,xayin(j,i)
+                     end do
+                  end do
+                  close(fd)
+                  close(fc)
+                  
+                  ! find reference velocity for each point                               
+                  do h=1,hn ! loop over all half-width thicknesses
+                     hh=(hs+hi*real(h-1))/2.35482 
+                     do z=1,zn ! loop over all center depths
+                        zz=zs+zi*real(z-1)                   
+                        do x=1,xn ! loop over all xi amplitudes
+                           xx=xs+xi*real(x-1)                  
+                           this%modarr_tot=this%modarr_tot+1                         
+                           ! ----- here the model is actually created for each 1deg block
+                           print*,"Generating model, h=",hh," z=",zz," x=",xx
+
+                           ! reset model values at each new model
+                           valtot_dlnvsh=0.d0
+                           valtot_dlnvsv=0.d0
+                           valtot_xi=0.d0
+ 
+                           do i=1,inmesh%nlays
+                              depth=insche%layer(i)+abs(insche%layer(i)-insche%layer(i+1))/2.d0                          
+                              do j=1,nlon*nlat                               
+
+                                 if (int(ages(j,3)).eq.999) then
+                                    xay=xayin(j,i)
+                                 else                         
+                                    xay=xx*exp(-(depth-zz)**2/(2*hh**2));
+                                 end if
+                              
+                                 ! reparameterize from dlnvs and xi to vsh and vsv
+                                 vsv=dsqrt((2.d0*(dlnvs(j,i)*ref3d_vs_agegrid(j,i)+&
+                                      ref3d_vs_agegrid(j,i))**2)/(xay+1.d0))
+                                 vsh=dsqrt((2.d0*(dlnvs(j,i)*ref3d_vs_agegrid(j,i)+&
+                                      ref3d_vs_agegrid(j,i))**2)/(xay**(-1)+1.d0))
+                                 dlnvsh=(vsh-ref3d_vsh_agegrid(j,i))/&
+                                      ref3d_vsh_agegrid(j,i) ! this is what i write out
+                                 dlnvsv=(vsv-ref3d_vsv_agegrid(j,i))/&
+                                      ref3d_vsv_agegrid(j,i) ! this is what i write out
+
+                                 valtot_dlnvsh(indper(j),i)=valtot_dlnvsh(indper(j),i)+dlnvsh
+                                 valtot_dlnvsv(indper(j),i)=valtot_dlnvsv(indper(j),i)+dlnvsv
+                                 valtot_xi(indper(j),i)=valtot_xi(indper(j),i)+xay
+                              
+                              end do
+                           end do
+
+                           ! arithmetic average of values
+                           do i=1,inmesh%nlays                              
+                              do j=1,inmesh%blocks_per_layer(i) 
+                                 valtot_dlnvsh(j,i)=valtot_dlnvsh(j,i)/real(numper(j))
+                                 valtot_dlnvsv(j,i)=valtot_dlnvsv(j,i)/real(numper(j))
+                                 valtot_xi(j,i)=valtot_xi(j,i)/real(numper(j))                                 
+                              end do
+                           end do
+
+                           ! write models to be tested to disk
+                           fname=trim(out_fold)//"/model.h"//trim(int2str(h))&
+                                //".z"//trim(int2str(z))&
+                                //".x"//trim(int2str(x))
+                           this%modarr_path(this%modarr_tot)=trim(fname)//".pcn"
+                           open(fg,file=trim(fname)//".pcn",iostat=ios)
+                           open(fx,file=trim(fname)//".xi",iostat=ios)
+                           write(fg,*) "VOXEL"
+                           i=0
+                           do j=1,inmesh%nlays
+                              do k=1,inmesh%blocks_per_layer(j)
+                                 i=i+1
+                                 write(fg,"(1x,i8,2e15.7)") i,valtot_dlnvsh(k,j)      
+                                 write(fx,"(1x,i8,2e15.7)") i,valtot_xi(k,j)
+                              enddo
+                           enddo
+                           do j=1,inmesh%nlays
+                              do k=1,inmesh%blocks_per_layer(j)
+                                 i=i+1
+                                 write(fg,"(1x,i8,2e15.7)") i,valtot_dlnvsv(k,j)
+                              enddo
+                           enddo
+                           close(fg)
+                           close(fx)
+                        end do
+                     end do
+                  end do
+                  
+               ! layer vs sqrt-of-age case   
+               else if (trim(hypo_type).eq.'SQR') then
+                  print*,"Not yet implemented"
+                  stop
+               else
+                  print*,"Incorrect hypo_type"
+                  stop                
+               end if
+
+               deallocate(locent,lacent,ages,ref3d_vs_agegrid,ref3d_vsh_agegrid,&
+                    ref3d_vsv_agegrid,valtot_xi,valtot_dlnvsh,valtot_dlnvsv,numper,&
+                    indper,dlnvs,xayin)              
+            end if
+            close(fh)
+            
+            end if ! processor
+            
+          end subroutine setup_model_array
+    !========================================================       
+
+
+    !========================================================       
+          subroutine read_3d_reference_model(this,inopts,inmesh,insche,inmatr)
+
+            implicit none
+            
+            class(back) :: this
+            class(opts) :: inopts
+            class(mesh) :: inmesh
+            class(sche) :: insche
+            class(matr) :: inmatr
+
+            PetscScalar incrdeg
+            PetscScalar lamax,lomin
+
+            PetscChar(10)  regname
+            PetscScalar    dummy(9)
+            PetscInt       ios,j,i,u,k
+            PetscInt       top,bot
+            PetscScalar    radius
+            PetscScalar    n,nn
+
+            PetscScalar coeff_vsv,coeff_vsv_pix
+            PetscScalar coeff_vsh,coeff_vsh_pix
+            PetscScalar coeff_vpv,coeff_vpv_pix
+            PetscScalar coeff_vph,coeff_vph_pix
+            
+            PetscInt, parameter :: fh=15 ! file handler
+            PetscInt, parameter :: fb=20 ! file handler
+
+            ! top 15 km to exclude water layer even at the deepest places
+            PetscInt, parameter :: exclude=15 
+
+
+            if ( inmatr%processor == 0 ) then
+
+            ios = 0
+            i = 0 ! nr of local profiles
+
+            open(fh,file=trim(inopts%refmod)//"/regions.dat")
+            read(unit=fh,fmt=*,iostat=ios) incrdeg            
+            this%npix = int(360.d0/incrdeg)*int(180.d0/incrdeg)
+            this%ndep = 6371 ! is always 6371 here
+
+            ! Initialize variables
+
+            ! Allocate according to incrdeg            
+            allocate(this%ref3d_vsv(this%npix,this%ndep))
+            allocate(this%ref3d_vsh(this%npix,this%ndep))
+            allocate(this%ref3d_vpv(this%npix,this%ndep))
+            allocate(this%ref3d_vph(this%npix,this%ndep))
+            allocate(this%ref3d_vsv_invmesh(n0max,inopts%nlays))
+            allocate(this%ref3d_vsh_invmesh(n0max,inopts%nlays))
+            allocate(this%ref3d_vpv_invmesh(n0max,inopts%nlays))
+            allocate(this%ref3d_vph_invmesh(n0max,inopts%nlays))
+            allocate(this%refmesh(this%npix,6))
+
+            this%ref3d_vsv=1.d0
+            this%ref3d_vsh=1.d0
+            this%ref3d_vpv=1.d0
+            this%ref3d_vph=1.d0
+            this%ref3d_vsv_invmesh=0.d0
+            this%ref3d_vsh_invmesh=0.d0
+            this%ref3d_vpv_invmesh=0.d0
+            this%ref3d_vph_invmesh=0.d0
+
+            do i=1,this%npix
+
+               if (mod(int(i),int(real(this%npix)/100.d0)).eq.0) then
+                    call PetscPrintf(PETSC_COMM_WORLD,&
+                         "BGMOD: Reading 3D reference model "//&
+                         trim(int2str(int((real(i)/real(this%npix))*100.d0)))//" %\n",ierr)               
+               end if
+
+               read(unit=fh,fmt=*,iostat=ios) lamax,lomin,regname
+               this%refmesh(i,1)=lamax-incrdeg/2.d0 ! center latitude
+               this%refmesh(i,2)=lomin+incrdeg/2.d0+360.d0 ! center longitude
+               this%refmesh(i,3)=lamax              ! max latitude
+               this%refmesh(i,4)=lamax-incrdeg      ! min latitude
+               this%refmesh(i,5)=lomin+incrdeg+360.d0      ! max longitude
+               this%refmesh(i,6)=lomin+360.d0              ! min longitude               
+
+               ! Shift grid, reference model grid starts at antimeridian
+               if (this%refmesh(i,2)>360.d0) this%refmesh(i,2)=this%refmesh(i,2)-360.d0
+               if (this%refmesh(i,5)>360.d0) this%refmesh(i,5)=this%refmesh(i,5)-360.d0
+               if (this%refmesh(i,6)>=360.d0) this%refmesh(i,6)=this%refmesh(i,6)-360.d0
+
+               open(fb,file=trim(inopts%refmod)//trim(regname))
+               do j=1,this%ndep
+                  read(unit=fb,fmt=*,iostat=ios) dummy(1:9)
+                  this%ref3d_vsv(i,j) = dummy(4)
+                  this%ref3d_vsh(i,j) = dummy(8)
+                  this%ref3d_vpv(i,j) = dummy(3)
+                  this%ref3d_vph(i,j) = dummy(7)
+                  if (int(this%ref3d_vsv(i,j)).eq.0) this%ref3d_vsv(i,j)=this%ref3d_vpv(i,j)
+                  if (int(this%ref3d_vsh(i,j)).eq.0) this%ref3d_vsh(i,j)=this%ref3d_vph(i,j)
+               end do
+               close(fb)            
+            end do
+            close(fh)
+
+            ! For each voxel, compute the reference velocity
+            do i=1,inmesh%nlays
+               do j=1,inmesh%blocks_per_layer(i)
+                  if (abs(inmesh%xlomin(j,i)-inmesh%xlomax(j,i)).gt.incrdeg) then
+                     ! Search for all center lats/lons of refgrid falling
+                     ! in current voxel
+                     n = 0.d0
+                     coeff_vsv_pix = 0.d0
+                     coeff_vsh_pix = 0.d0
+                     coeff_vpv_pix = 0.d0
+                     coeff_vph_pix = 0.d0
+                     do k=1,this%npix                        
+                        if((this%refmesh(k,1).ge.inmesh%xlamin(j,i)).and.&
+                           (this%refmesh(k,1).le.inmesh%xlamax(j,i)).and.&
+                           (this%refmesh(k,2).ge.inmesh%xlomin(j,i)).and.&
+                           (this%refmesh(k,2).le.inmesh%xlomax(j,i))) then
+                           nn = 0.d0
+                           coeff_vsv = 0.d0
+                           coeff_vsh = 0.d0
+                           coeff_vpv = 0.d0
+                           coeff_vph = 0.d0
+                           top=int(insche%layer(i))
+                           ! Exclude the water layer and shallow sediments
+                           if (top.lt.exclude) top = exclude
+                           bot=int(insche%layer(i+1))
+                           do u=top,bot
+                              radius = r_earth - float(u)
+                              coeff_vsv = coeff_vsv + this%ref3d_vsv(k,int(radius))
+                              coeff_vsh = coeff_vsh + this%ref3d_vsh(k,int(radius))
+                              coeff_vpv = coeff_vpv + this%ref3d_vpv(k,int(radius))
+                              coeff_vph = coeff_vph + this%ref3d_vph(k,int(radius))
+                              nn = nn + 1.d0
+                           end do
+                           n = n + 1.d0
+                           coeff_vsv_pix = coeff_vsv_pix + coeff_vsv / nn
+                           coeff_vsh_pix = coeff_vsh_pix + coeff_vsh / nn
+                           coeff_vpv_pix = coeff_vpv_pix + coeff_vpv / nn
+                           coeff_vph_pix = coeff_vph_pix + coeff_vph / nn
+                        end if                       
+                     end do
+                     if (n.eq.0.d0) then
+                        print*,"Something went wrong"
+                        print*,i,j
+                        stop
+                     end if
+                     this%ref3d_vsv_invmesh(j,i) = coeff_vsv_pix / n
+                     this%ref3d_vsh_invmesh(j,i) = coeff_vsh_pix / n
+                     this%ref3d_vpv_invmesh(j,i) = coeff_vpv_pix / n
+                     this%ref3d_vph_invmesh(j,i) = coeff_vph_pix / n
+                  else if (abs(inmesh%xlomin(j,i)-inmesh%xlomax(j,i)).le.incrdeg) then
+                     nn = 0.d0
+                     coeff_vsv = 0.d0
+                     coeff_vsh = 0.d0
+                     coeff_vpv = 0.d0
+                     coeff_vph = 0.d0
+                     do k=1,this%npix
+                        ! THIS IS NOT TESTED; THERE MIGHT BE A BUG IN HERE
+                        if((inmesh%lacent(j,i).ge.this%refmesh(k,4)).and.&
+                           (inmesh%lacent(j,i).le.this%refmesh(k,3)).and.&
+                           (inmesh%locent(j,i).ge.this%refmesh(k,5)).and.&
+                           (inmesh%locent(j,i).le.this%refmesh(k,6))) then
+                           top=int(insche%layer(i))
+                           ! Exclude the water layer and shallow sediments
+                           if (top.lt.exclude) top = exclude
+                           if (top.eq.0) top = 1
+                           bot=int(insche%layer(i+1))
+                           do u=top,bot
+                              radius = r_earth - float(u)
+                              coeff_vsv = coeff_vsv + this%ref3d_vsv(k,int(radius))
+                              coeff_vsh = coeff_vsh + this%ref3d_vsh(k,int(radius))
+                              coeff_vpv = coeff_vpv + this%ref3d_vpv(k,int(radius))
+                              coeff_vph = coeff_vph + this%ref3d_vph(k,int(radius))
+                              nn = nn + 1.d0
+                           end do
+                           this%ref3d_vsv_invmesh(j,i) = coeff_vsv / nn
+                           this%ref3d_vsh_invmesh(j,i) = coeff_vsh / nn
+                           this%ref3d_vpv_invmesh(j,i) = coeff_vpv / nn
+                           this%ref3d_vph_invmesh(j,i) = coeff_vph / nn
+                           exit
+                        end if
+                     end do
+                  end if
+               end do
+            end do
+            
+            call PetscPrintf(PETSC_COMM_WORLD,&
+                 "SCHEDULER: Successfully read 3D reference model!\n ",ierr)
+
+            end if
+            
+          end subroutine read_3d_reference_model
+
 
     !========================================================
     !
     !  function returning average model coeff for radius interval
     !
-          doubleprecision function get_model_coeff_aver(this,dbeg,dend,incr,param,bgmod)
+          doubleprecision function get_model_coeff_aver_1d(this,dbeg,dend,incr,param,bgmod)
 
             class(back),      intent(in) :: this
             PetscScalar,      intent(in) :: dbeg
@@ -2313,9 +2784,9 @@
                end select  
             end do
 
-            get_model_coeff_aver = coeff / count
+            get_model_coeff_aver_1d = coeff / count
 
-          end function get_model_coeff_aver
+          end function get_model_coeff_aver_1d
     !========================================================
 
 
@@ -2323,7 +2794,7 @@
     !
     !  function returning model coefficients at specified depths
     !
-          doubleprecision function get_model_coeff(this,depth,param,bgmod)
+          doubleprecision function get_model_coeff_1d(this,depth,param,bgmod)
 
             class(back),      intent(in) :: this
             PetscScalar,      intent(in) :: depth
@@ -2333,19 +2804,22 @@
             PetscInt idom
 
             radius = r_earth - depth
-            idom = this%get_idom(radius,bgmod)            
+            idom = this%get_idom(radius,bgmod)   
+                    
             select case(trim(bgmod))
             case('prem_iso')             
-               get_model_coeff = prem_ani(radius,param,idom) !@TODO prem_iso              
+               get_model_coeff_1d = prem_ani(radius,param,idom) !@TODO prem_iso              
             case('prem_ani')
-               get_model_coeff = prem_ani(radius,param,idom)
-            case default
+               get_model_coeff_1d = prem_ani(radius,param,idom)
+            case default               
                write(6,*) 'POSTPROC: Unknown background model: ', trim(bgmod)
                stop
-             end select
+            end select
 
-          end function get_model_coeff
+          end function get_model_coeff_1d
     !========================================================
+
+
 
 
     !========================================================
@@ -2629,6 +3103,7 @@
              procedure, pass :: compute_varr
              procedure, nopass :: sph2cart
              procedure, nopass :: dump_model_ascii
+             procedure, nopass :: dump_model_ascii_rtpv
              procedure, nopass :: dump_modarr_ascii
              procedure, pass :: dump_model_xdmf
              procedure, pass :: dump_run_info
@@ -2697,7 +3172,7 @@
                      allocate ( this%connectivity(8,inmesh%blocks_per_param) ) 
                      allocate ( this%vertices(3,8*inmesh%blocks_per_param) )
                   end if
-
+                  
                end if
 
                ! Buffers for model roughness, norm and iterations
@@ -2808,7 +3283,7 @@
     !
     !  reparameterize from original parameterization to
     !
-          subroutine reparam_solution(this,inopts,inmatr,inmesh,insche)
+          subroutine reparam_solution(this,inopts,inmatr,inmesh,insche,inback)
 
             implicit none
             
@@ -2817,8 +3292,7 @@
             class(opts) :: inopts
             class(sche) :: insche
             class(mesh) :: inmesh
-
-            type(back)  :: my_back ! background model type
+            class(back) :: inback
             
             PetscScalar dlnvsh,dlnvsv
             PetscScalar dlnvph,dlnvpv
@@ -2838,6 +3312,19 @@
             ix_vsh = 0
             ix_vph = 0
             ix_vpv = 0
+
+            ! Initialize variables
+            vsh = 0.d0
+            vsv = 0.d0
+            vph = 0.d0
+            vpv = 0.d0
+            gamma = 0.d0
+            ref_vsh = 0.d0
+            ref_vsv = 0.d0
+            ref_vph = 0.d0
+            ref_vpv = 0.d0
+            ref_vs = 0.d0
+            ref_vp = 0.d0
 
             call PetscPrintf(PETSC_COMM_WORLD,"    reparameterizing model!\n",ierr)  
             if (inmatr%processor == 0) then              
@@ -2879,28 +3366,43 @@
                   this%do_vc = .true.
                end if
 
-
                k = 0
                do l=2,inopts%nlays+1
                   i = l-1
                   if (verbosity > 1) print*,"Reparameterizing at layer: ",i
 
-                  ! Evaluate arithmetic average of background model within current layer
-                  ref_vsh = my_back%get_model_coeff_aver(insche%layer(l-1),insche%layer(l),&
-                                                         incr,'vsh',inopts%refmod)
-                  ref_vsv = my_back%get_model_coeff_aver(insche%layer(l-1),insche%layer(l),&
-                                                         incr,'vsv',inopts%refmod)
-                  ref_vph = my_back%get_model_coeff_aver(insche%layer(l-1),insche%layer(l),&
-                                                         incr,'vph',inopts%refmod)
-                  ref_vpv = my_back%get_model_coeff_aver(insche%layer(l-1),insche%layer(l),&
-                                                         incr,'vpv',inopts%refmod)
+                  ! In case your reference model is 1D, you need to evaluate it only once per layer
+                  if (.not.insche%i3dref) then
+                     ! Evaluate arithmetic average of background model within current layer
+                     ref_vsh = inback%get_model_coeff_aver_1d(insche%layer(l-1),insche%layer(l),&
+                          incr,'vsh',inopts%refmod)
+                     ref_vsv = inback%get_model_coeff_aver_1d(insche%layer(l-1),insche%layer(l),&
+                          incr,'vsv',inopts%refmod)
+                     ref_vph = inback%get_model_coeff_aver_1d(insche%layer(l-1),insche%layer(l),&
+                          incr,'vph',inopts%refmod)
+                     ref_vpv = inback%get_model_coeff_aver_1d(insche%layer(l-1),insche%layer(l),&
+                          incr,'vpv',inopts%refmod)
+                     ! Voigt average velocities
+                     ref_vp = dsqrt ( ( ref_vpv**2 + 4.d0*ref_vph**2 ) / 5.d0 )
+                     ref_vs = dsqrt ( ( 2.d0*ref_vsv**2 + ref_vsh**2 ) / 3.d0 )
+                     gamma  = (4.d0/3.d0) * ref_vs**2 / ref_vp**2                     
+                  end if
 
-                  ! Voigt average velocities
-                  ref_vp = dsqrt ( ( ref_vpv**2 + 4*ref_vph**2 ) / 5 )
-                  ref_vs = dsqrt ( ( 2*ref_vsv**2 + ref_vsh**2 ) / 3 )
-                  gamma  = (4.d0/3.d0) * ref_vs**2 / ref_vp**2
+                  do j=k+1,k+inmesh%blocks_per_layer(i)
 
-                  do j=k+1,k+inmesh%blocks_per_layer(i) 
+                     ! In case your reference model is 3D you need to evaluate it for each voxel
+                     if (insche%i3dref) then
+                        ! Evaluate arithmetic average of background in current block
+                        ref_vsh = inback%ref3d_vsh_invmesh(j-k,l-1)
+                        ref_vsv = inback%ref3d_vsv_invmesh(j-k,l-1)
+                        ref_vph = inback%ref3d_vph_invmesh(j-k,l-1)
+                        ref_vpv = inback%ref3d_vpv_invmesh(j-k,l-1)
+                        ! Voigt average velocities
+                        ref_vp = dsqrt ( ( ref_vpv**2 + 4.d0*ref_vph**2 ) / 5.d0 )
+                        ref_vs = dsqrt ( ( 2.d0*ref_vsv**2 + ref_vsh**2 ) / 3.d0 )
+                        gamma  = (4.d0/3.d0) * ref_vs**2 / ref_vp**2                        
+                     end if
+
                      if (this%do_vph) then
                         ind = j + (ix_vph-1)*inmesh%blocks_per_param 
                         this%sol_vph(j) = ref_vph + ref_vph*this%sol_raw(ind)
@@ -3090,6 +3592,55 @@
                      ident=trim(ident_base)//'_ph.abs'
                      call this%dump_model_ascii(this%sol_ph,ident)  
                   end if 
+               case ('ascii_rtpv')
+                  if (this%do_vp) then
+                     ident=trim(ident_base)//'_dlnvp.pcn'                     
+                     call this%dump_model_ascii_rtpv(inmesh,insche,this%sol_dlnvp,ident)
+                     ident=trim(ident_base)//'_vp.abs'
+                     call this%dump_model_ascii_rtpv(inmesh,insche,this%sol_vp,ident)
+                  end if
+                  if (this%do_vs) then
+                     ident=trim(ident_base)//'_dlnvs.pcn'
+                     call this%dump_model_ascii_rtpv(inmesh,insche,this%sol_dlnvs,ident)      
+                     ident=trim(ident_base)//'_vs.abs'
+                     call this%dump_model_ascii_rtpv(inmesh,insche,this%sol_vs,ident)
+                  end if
+                  if (this%do_vc) then
+                     ident=trim(ident_base)//'_dlnvc.pcn'                     
+                     call this%dump_model_ascii_rtpv(inmesh,insche,this%sol_dlnvc,ident)
+                  end if
+                  if (this%do_vsh) then
+                     ident=trim(ident_base)//'_dlnvsh.pcn'
+                     call this%dump_model_ascii_rtpv(inmesh,insche,this%sol_dlnvsh,ident)       
+                     ident=trim(ident_base)//'_vsh.abs'
+                     call this%dump_model_ascii_rtpv(inmesh,insche,this%sol_vsh,ident)  
+                  end if
+                  if (this%do_vsv) then
+                     ident=trim(ident_base)//'_dlnvsv.pcn'     
+                     call this%dump_model_ascii_rtpv(inmesh,insche,this%sol_dlnvsv,ident)                  
+                     ident=trim(ident_base)//'_vsv.abs'
+                     call this%dump_model_ascii_rtpv(inmesh,insche,this%sol_vsv,ident)  
+                  end if
+                  if (this%do_vph) then
+                     ident=trim(ident_base)//'_dlnvph.pcn'
+                     call this%dump_model_ascii_rtpv(inmesh,insche,this%sol_dlnvph,ident)         
+                     ident=trim(ident_base)//'_vph.abs'
+                     call this%dump_model_ascii_rtpv(inmesh,insche,this%sol_vph,ident)  
+                  end if
+                  if (this%do_vpv) then
+                     ident=trim(ident_base)//'_dlnvpv.pcn'
+                     call this%dump_model_ascii_rtpv(inmesh,insche,this%sol_dlnvpv,ident)                  
+                     ident=trim(ident_base)//'_vpv.abs'
+                     call this%dump_model_ascii_rtpv(inmesh,insche,this%sol_vpv,ident)  
+                  end if
+                  if (this%do_xi) then
+                     ident=trim(ident_base)//'_xi.abs'
+                     call this%dump_model_ascii_rtpv(inmesh,insche,this%sol_xi,ident)  
+                  end if
+                  if (this%do_ph) then
+                     ident=trim(ident_base)//'_ph.abs'
+                     call this%dump_model_ascii_rtpv(inmesh,insche,this%sol_ph,ident)  
+                  end if 
                case default
                   call PetscPrintf(PETSC_COMM_WORLD,&
                        "POSTPROC: Unknown format, quitting!\n",ierr)
@@ -3185,7 +3736,39 @@
 
     !========================================================
     !   
-    !  dumps solution in a simple ascii format
+    !  dumps solution in a simple rtpv ascii format
+    !                
+          subroutine dump_model_ascii_rtpv(inmesh,insche,invec,ident)
+
+            implicit none        
+   
+            class(mesh) :: inmesh
+            class(sche) :: insche
+            PetscScalar,      intent(in) :: invec(:)
+            character(len=*), intent(in) :: ident
+            PetscInt npars,stat,i,j,n
+            PetscScalar r_center
+
+            n=0
+            open(85,file="./results/"//trim(ident),iostat=stat)
+            do i = 1,inmesh%nlays               
+               r_center = r_earth-insche%layer(i+1)+&
+                          abs(insche%layer(i)-insche%layer(i+1))/2.d0
+               do j = 1,inmesh%blocks_per_layer(i)
+                  n=n+1
+                  write(85,"(1x,2e15.7,2e15.7,2e15.7,2e15.7)") r_center,inmesh%locent(j,i),&
+                                                               inmesh%lacent(j,i),invec(n)
+               end do
+            end do
+            close(85)
+            
+          end subroutine dump_model_ascii_rtpv
+    !========================================================
+
+
+    !========================================================
+    !   
+    !  dumps model_array reuslt in a simple ascii format
     !                
           subroutine dump_modarr_ascii(invec,ident)
 
@@ -3548,7 +4131,7 @@
      type(matr) my_matr ! setup the global system
      type(solv) my_solv ! setup solver context
      type(post) my_post ! background model type
-
+     type(back) my_back ! background model type
       
 ! - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 !           Beginning of main program routine program
@@ -3592,12 +4175,19 @@
       call PetscPrintf(PETSC_COMM_WORLD,"SETTING UP MATRIX\n",ierr)
       call PetscPrintf(PETSC_COMM_WORLD,"==============================\n\n",ierr)
       call my_matr % initialize_matrix(my_sche,my_mesh) 
-
       ! read all submatrices from disk
       call my_matr % read_submatrices(my_sche)       
 
-      select case (my_sche%major_mode)
+      ! Initialize 3D reference model
+      call PetscPrintf(PETSC_COMM_WORLD,"\n==============================\n",ierr)
+      call PetscPrintf(PETSC_COMM_WORLD,"READING REFERENCE MODEL \n",ierr)
+      call PetscPrintf(PETSC_COMM_WORLD,"==============================\n\n",ierr)
+      if (my_sche%i3dref) then
+         call my_back%read_3d_reference_model(my_opts,my_mesh,my_sche,my_matr)
+      end if      
 
+
+      select case (my_sche%major_mode)
       case ('INVERSION')
 
          !********************************
@@ -3634,6 +4224,8 @@
             call PetscPrintf(PETSC_COMM_WORLD,"\n--- ASSEMBLING MATRIX --->\n",ierr)
             call my_matr % assemble_matrix()
 
+
+
             ! In case this is the first run, store rhs
             if (irun==1) call my_matr % store_rhs()   
 
@@ -3644,7 +4236,7 @@
                if (irun==1) then               
                   call my_matr % read_synth_model(my_opts,my_mesh,my_sche,my_opts%synth) ! @ TODO: why do I re-read the synthetic model
                   call my_post % initialize_postproc(my_opts,my_matr,my_mesh,my_sche,my_matr%x_synth) ! @ TODO: Can't i just initialize it at one loc?
-                  call my_post % reparam_solution(my_opts,my_matr,my_mesh,my_sche) ! reparameterize input synthetic model
+                  call my_post % reparam_solution(my_opts,my_matr,my_mesh,my_sche,my_back) ! reparameterize input synthetic model
                   call my_post % export_solution(my_opts,my_matr,my_mesh,my_sche,irun,'synth_input') ! dump input synthetic model
                end if
                call my_matr % assemble_matrix() ! Need to reassemble matrices and vectors
@@ -3686,7 +4278,7 @@
             end if
          
             ! Reparameterize and export solution
-            call my_post % reparam_solution(my_opts,my_matr,my_mesh,my_sche)
+            call my_post % reparam_solution(my_opts,my_matr,my_mesh,my_sche,my_back)
             call my_post % export_solution(my_opts,my_matr,my_mesh,my_sche,irun) ! also dums varr
 
          end do
@@ -3710,21 +4302,21 @@
               //" on "//trim(my_opts%modarr)//"\n",ierr)
          call PetscPrintf(PETSC_COMM_WORLD,"==============================\n\n",ierr)
          
-         call my_sche % read_model_array(my_opts)
+         call my_back % setup_model_array(my_opts,my_sche,my_mesh,my_matr)
          call my_matr % apply_rdamp(my_opts,my_mesh,my_sche,0)  ! irun 0 to get unweighted operator
          call my_matr % assemble_matrix() ! Need to reassemble matrices and vectors
 
          ! Loop over model array
-         do irun=1,my_sche%modarr_tot
+         do irun=1,my_back%modarr_tot
 
             ! Read synthetic model
             call PetscPrintf(PETSC_COMM_WORLD,"\n--- Testing model # "//trim(int2str(irun))//&
-                 " of "//trim(int2str(my_sche%modarr_tot))//"--->\n",ierr)
+                 " of "//trim(int2str(my_back%modarr_tot))//"--->\n",ierr)
                       
-            call my_matr % read_synth_model(my_opts,my_mesh,my_sche,my_sche%modarr_path(irun)) ! @ TODO: why do I re-read the synthetic model
+            call my_matr % read_synth_model(my_opts,my_mesh,my_sche,my_back%modarr_path(irun)) ! @ TODO: why do I re-read the synthetic model
             call my_post % initialize_postproc(my_opts,my_matr,my_mesh,my_sche,my_matr%x_synth) ! x_synth is copied over to x!
-            call my_post % reparam_solution(my_opts,my_matr,my_mesh,my_sche) ! reparameterize input synthetic model
-            call my_post % export_solution(my_opts,my_matr,my_mesh,my_sche,irun,"model_array") !mp input synthetic model
+            ! call my_post % reparam_solution(my_opts,my_matr,my_mesh,my_sche,my_back) ! reparameterize input synthetic model
+            ! call my_post % export_solution(my_opts,my_matr,my_mesh,my_sche,irun,"model_array") !mp input synthetic model
 
             ! Compute model roughness, norm, varr
             call my_post % compute_norm(my_matr,1) ! just temporarily saving in irun 1
@@ -3732,10 +4324,12 @@
             call my_post % compute_varr(my_matr,my_sche,0,&
                            my_sche%rows_total,my_post%varr_cumm(1)) ! just temporarily saving in irun 1
 
+            if (my_matr%processor==0) print*,"   Fit: ",my_post%varr_cumm(1)
+
             ! Store results in temporary array
-            my_sche%modarr_res(irun,1)=my_post%varr_cumm(1)
-            my_sche%modarr_res(irun,2)=my_post%rough_nrm(1)
-            my_sche%modarr_res(irun,3)=my_post%rough_abs(1)
+            my_back%modarr_res(irun,1)=my_post%varr_cumm(1)
+            my_back%modarr_res(irun,2)=my_post%rough_nrm(1)
+            my_back%modarr_res(irun,3)=my_post%rough_abs(1)
 
          end do
 
@@ -3743,11 +4337,12 @@
          call PetscPrintf(PETSC_COMM_WORLD,"FINALIZING MISFIT TEST\n",ierr)
          call PetscPrintf(PETSC_COMM_WORLD,"==============================\n\n",ierr)
 
-         call my_post % dump_modarr_ascii(my_sche%modarr_res,trim(my_opts%projid)//'_modelarray_misfits.dat')       
+         call my_post % dump_modarr_ascii(my_back%modarr_res,trim(my_opts%projid)//'_modelarray_misfits.dat')       
 
          ! Free work space.
          call my_post % destroy_postproc()         
          call my_matr % destroy_matrix()
+
 
       end select
 
