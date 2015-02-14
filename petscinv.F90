@@ -2287,6 +2287,9 @@
             PetscInt, parameter :: fd=19 ! file handler
             PetscInt, parameter :: fg=20 ! file handler
             PetscInt, parameter :: fx=21 ! file handler
+            PetscInt, parameter :: ga=22 ! file handler
+            PetscInt, parameter :: gb=23 ! file handler
+
 
             PetscInt, parameter :: exclude=0 ! file handler
                                                                     
@@ -2321,7 +2324,6 @@
             PetscScalar vs,xay,vsh,vsv,dlnvsv,dlnvsh,dlnvs_in
             
 
-            if ( inmatr%processor == 0 ) then
 
             ios = 0
             open(fh,file=trim(inopts%modarr))
@@ -2340,14 +2342,9 @@
                
             ! setup models and associated model array on the fly
             else if (this%modarr_tot.eq.0) then
-               
-               allocate(valtot_dlnvsh(n0max,inopts%nlays))
-               allocate(valtot_dlnvsv(n0max,inopts%nlays))
-               allocate(valtot_xi(n0max,inopts%nlays))
 
                allocate(this%modarr_path(10000))
-               allocate(this%modarr_res(10000,3))
-
+               allocate(this%modarr_res(10000,3))              
                this%modarr_tot=0               
                
                ! read wether LAY or SQRT
@@ -2357,6 +2354,12 @@
                read(unit=fh,fmt=*,iostat=ios) iso_fold
                read(unit=fh,fmt=*,iostat=ios) ani_fold
                read(unit=fh,fmt=*,iostat=ios) out_fold
+
+               if ( inmatr%processor == 0 ) then
+
+               allocate(valtot_dlnvsh(n0max,inopts%nlays))
+               allocate(valtot_dlnvsv(n0max,inopts%nlays))
+               allocate(valtot_xi(n0max,inopts%nlays))
                
                if (trim(hypo_type).eq.'LAY') then
                   
@@ -2408,8 +2411,11 @@
                               end do
                               ref3d_vsv_agegrid(j,i) = coeff_vsv / nn
                               ref3d_vsh_agegrid(j,i) = coeff_vsh / nn
-                              ref3d_vs_agegrid(j,i) = dsqrt ( ( 2.d0 * ref3d_vsv_agegrid(j,i)**2 + &
-                                   ref3d_vsh_agegrid(j,i)**2 ) / 3.d0)
+!                              ref3d_vs_agegrid(j,i) = dsqrt ( ( 2.d0 * ref3d_vsv_agegrid(j,i)**2 + &
+!                                   ref3d_vsh_agegrid(j,i)**2 ) / 3.d0)
+                              ref3d_vs_agegrid(j,i) = dsqrt (0.5 * ref3d_vsv_agegrid(j,i)**2 + &
+                                   0.5 * ref3d_vsh_agegrid(j,i)**2 )
+
                               exit
                            end if
                         end do
@@ -2540,7 +2546,15 @@
                      end do
                   end do
                   
-               ! layer vs sqrt-of-age case   
+                  ! store model_array.in file
+                  open(ga,file=trim(out_fold)//"/model_array.in",iostat=ios)                  
+                  write(ga,*) this%modarr_tot
+                  do i=1,this%modarr_tot
+                     write(ga,*) '"'//trim(this%modarr_path(i))//'"'
+                  end do
+                  close(ga)
+                  
+                  ! layer vs sqrt-of-age case   
                else if (trim(hypo_type).eq.'SQR') then
                   print*,"Not yet implemented"
                   stop
@@ -2552,10 +2566,23 @@
                deallocate(locent,lacent,ages,ref3d_vs_agegrid,ref3d_vsh_agegrid,&
                     ref3d_vsv_agegrid,valtot_xi,valtot_dlnvsh,valtot_dlnvsv,numper,&
                     indper,dlnvs,xayin)              
+
+               end if ! processor
+
+               ! this is a bit stupid, i read back from the file, to have paths on all processors
+               open(gb,file=trim(out_fold)//"/model_array.in")
+               read(unit=gb,fmt=*,iostat=ios) this%modarr_tot               
+               do i=1,this%modarr_tot
+                  read(unit=gb,fmt=*,iostat=ios) this%modarr_path(i)
+                  call PetscPrintf(PETSC_COMM_WORLD,"SCHEDULER: Reading model path "//&
+                       trim(this%modarr_path(i))//"\n",ierr)
+               end do
+               close(gb)
+
+
             end if
             close(fh)
             
-            end if ! processor
             
           end subroutine setup_model_array
     !========================================================       
