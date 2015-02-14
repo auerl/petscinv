@@ -1938,8 +1938,8 @@
 
 
                         ! Shift grid
-                        !lon=lon+360.d0 
-                        !if (lon.gt.(359.60)) lon=lon-360.d0 
+                        ! lon=lon+360.d0 
+                        ! if (lon.gt.(359.60)) lon=lon-360.d0 
 
                         ! In which layer are we
                         foundlay=.false.
@@ -2318,7 +2318,7 @@
             PetscInt h,x,z,u,l
             PetscInt hn,xn,zn,nlon,nlat,nage
             PetscScalar age_incr,radius,depth
-            PetscScalar vs,xay,vsh,vsv,dlnvsv,dlnvsh
+            PetscScalar vs,xay,vsh,vsv,dlnvsv,dlnvsh,dlnvs_in
             
 
             if ( inmatr%processor == 0 ) then
@@ -2388,6 +2388,8 @@
                         coeff_vsh = 0.d0
                         lacent(j) = ages(j,2)-age_incr/2.d0
                         locent(j) = ages(j,1)+age_incr/2.d0
+
+                        ! Uncomment in case you want to use a 3D reference model for your tests
                         do k=1,this%npix
                            if((lacent(j).ge.this%refmesh(k,4)).and.&
                               (lacent(j).le.this%refmesh(k,3)).and.&
@@ -2411,6 +2413,16 @@
                               exit
                            end if
                         end do
+
+                        ! ! Uncomment in case you want to use a 1D reference model for your tests
+                        ! ref3d_vsh_agegrid(j,i) = this%get_model_coeff_aver_1d(insche%layer(i),insche%layer(i+1),&
+                        !      1.d0,'vsh','prem_ani')
+                        ! ref3d_vsv_agegrid(j,i) = this%get_model_coeff_aver_1d(insche%layer(i),insche%layer(i+1),&
+                        !      1.d0,'vsv','prem_ani')
+                        ! ref3d_vs_agegrid(j,i) = dsqrt ( ( 2.d0 * ref3d_vsv_agegrid(j,i)**2 + &
+                        !      ref3d_vsh_agegrid(j,i)**2 ) / 3.d0)
+
+
                         ! for each pixel, figure out which pixels in the 
                         ! inversion grid they contribute to, only need to
                         ! do this once for the first layer
@@ -2429,8 +2441,6 @@
                      end do
                   end do
                   close(fb)
-!                  print*,numper
-!                  print*,indper
                   
                   ! read isotropic and continental xi background models
                   allocate(dlnvs(nlon*nlat,inmesh%nlays))
@@ -2440,9 +2450,10 @@
                      do j=1,nlon*nlat                                                       
                         write(nlaychar,"(i2.2)") i
                         open(fc,file=trim(iso_fold)//"/layer_"//nlaychar)
-                        open(fd,file=trim(ani_fold)//"/layer_"//nlaychar)                            
-                        read(unit=fc,fmt=*,iostat=ios) dummy,dummy,dlnvs(j,i)
+                        open(fd,file=trim(ani_fold)//"/layer_"//nlaychar)                        
+                        read(unit=fc,fmt=*,iostat=ios) dummy,dummy,dlnvs_in
                         read(unit=fd,fmt=*,iostat=ios) dummy,dummy,xayin(j,i)
+                        dlnvs(j,i)=dlnvs_in/100.d0
                      end do
                   end do
                   close(fd)
@@ -2471,7 +2482,7 @@
                                  if (int(ages(j,3)).eq.999) then
                                     xay=xayin(j,i)
                                  else                         
-                                    xay=xx*exp(-(depth-zz)**2/(2*hh**2));
+                                    xay=1.d0+xx*exp(-(depth-zz)**2/(2*hh**2));
                                  end if
                               
                                  ! reparameterize from dlnvs and xi to vsh and vsv
@@ -2483,6 +2494,7 @@
                                       ref3d_vsh_agegrid(j,i) ! this is what i write out
                                  dlnvsv=(vsv-ref3d_vsv_agegrid(j,i))/&
                                       ref3d_vsv_agegrid(j,i) ! this is what i write out
+
 
                                  valtot_dlnvsh(indper(j),i)=valtot_dlnvsh(indper(j),i)+dlnvsh
                                  valtot_dlnvsv(indper(j),i)=valtot_dlnvsv(indper(j),i)+dlnvsv
@@ -2512,14 +2524,14 @@
                            do j=1,inmesh%nlays
                               do k=1,inmesh%blocks_per_layer(j)
                                  i=i+1
-                                 write(fg,"(1x,i8,2e15.7)") i,valtot_dlnvsh(k,j)      
+                                 write(fg,"(1x,i8,2e15.7)") i,valtot_dlnvsh(k,j)*100.d0      
                                  write(fx,"(1x,i8,2e15.7)") i,valtot_xi(k,j)
                               enddo
                            enddo
                            do j=1,inmesh%nlays
                               do k=1,inmesh%blocks_per_layer(j)
                                  i=i+1
-                                 write(fg,"(1x,i8,2e15.7)") i,valtot_dlnvsv(k,j)
+                                 write(fg,"(1x,i8,2e15.7)") i,valtot_dlnvsv(k,j)*100.d0
                               enddo
                            enddo
                            close(fg)
