@@ -2289,11 +2289,10 @@
             PetscInt, parameter :: fx=21 ! file handler
             PetscInt, parameter :: ga=22 ! file handler
             PetscInt, parameter :: gb=23 ! file handler
-
-
             PetscInt, parameter :: exclude=0 ! file handler
                                                                     
             PetscScalar, allocatable :: ages(:,:)
+            PetscScalar, allocatable :: ages_use(:,:)
             PetscScalar, allocatable :: locent(:)
             PetscScalar, allocatable :: lacent(:)
             
@@ -2303,14 +2302,18 @@
 
             PetscScalar, allocatable :: dlnvs(:,:)
             PetscScalar, allocatable :: xayin(:,:)
+            PetscScalar, allocatable :: xiav_c(:)
+
             PetscScalar, allocatable :: valtot_dlnvsh(:,:)
             PetscScalar, allocatable :: valtot_dlnvsv(:,:)        
             PetscScalar, allocatable :: valtot_xi(:,:)        
             PetscInt, allocatable :: numper(:)
             PetscInt, allocatable :: indper(:)
             
-
             PetscScalar coeff_vsv,coeff_vsh,nn
+            PetscScalar ffc,ffa,mean_depth,numb_depth
+            PetscScalar star_depth,incr_depth,xiav_n
+            PetscScalar nominal_thick,nominal_depth
             PetscInt top,bot,yoo
             
             PetscChar(2)   nlaychar
@@ -2323,8 +2326,6 @@
             PetscScalar age_incr,radius,depth
             PetscScalar vs,xay,vsh,vsv,dlnvsv,dlnvsh,dlnvs_in
             
-
-
             ios = 0
             open(fh,file=trim(inopts%modarr))
             read(unit=fh,fmt=*,iostat=ios) this%modarr_tot
@@ -2360,111 +2361,249 @@
                allocate(valtot_dlnvsh(n0max,inopts%nlays))
                allocate(valtot_dlnvsv(n0max,inopts%nlays))
                allocate(valtot_xi(n0max,inopts%nlays))
-               
-               if (trim(hypo_type).eq.'LAY') then
-                  
-                  read(unit=fh,fmt=*,iostat=ios) dummy,hs,hi,hn
-                  read(unit=fh,fmt=*,iostat=ios) dummy,zs,zi,zn
-                  read(unit=fh,fmt=*,iostat=ios) dummy,xs,xi,xn                  
-                  open(fb,file=trim(age_file))
-                  
-                  nlon=int(360.d0/age_incr)
-                  nlat=int(180.d0/age_incr)
-                  
-                  allocate(ages(nlon*nlat,3))
-                  allocate(locent(nlon*nlat))
-                  allocate(lacent(nlon*nlat))
-                  
-                  allocate(ref3d_vsh_agegrid(nlon*nlat,inmesh%nlays))
-                  allocate(ref3d_vsv_agegrid(nlon*nlat,inmesh%nlays))
-                  allocate(ref3d_vs_agegrid(nlon*nlat,inmesh%nlays))
-                  
-                  allocate(numper(inmesh%blocks_per_layer(1)))
-                  allocate(indper(nlon*nlat))
-                  
-                  do i=1,inmesh%nlays
-                     print*,"Setting up 1x1 degree reference model, layer:",i,nlon*nlat
-                     do j=1,nlon*nlat
-                        if (i.eq.1) read(unit=fb,fmt=*,iostat=ios) ages(j,:)
-                        nn = 0.d0
-                        coeff_vsv = 0.d0
-                        coeff_vsh = 0.d0
-                        lacent(j) = ages(j,2)-age_incr/2.d0
-                        locent(j) = ages(j,1)+age_incr/2.d0
+                                 
+               read(unit=fh,fmt=*,iostat=ios) dummy,hs,hi,hn
+               read(unit=fh,fmt=*,iostat=ios) dummy,zs,zi,zn
+               read(unit=fh,fmt=*,iostat=ios) dummy,xs,xi,xn
+               if (trim(hypo_type).eq.'SQR') read(unit=fh,fmt=*,iostat=ios) nominal_depth
+               if (trim(hypo_type).eq.'SQR') read(unit=fh,fmt=*,iostat=ios) nominal_thick
 
-                        ! Uncomment in case you want to use a 3D reference model for your tests
-                        do k=1,this%npix
-                           if((lacent(j).ge.this%refmesh(k,4)).and.&
-                              (lacent(j).le.this%refmesh(k,3)).and.&
-                              (locent(j).le.this%refmesh(k,5)).and.&
-                              (locent(j).ge.this%refmesh(k,6))) then
-                              top=int(insche%layer(i))
-                              ! Exclude the water layer and shallow sediments
-                              if (top.lt.exclude) top = exclude
-                              if (top.eq.0) top = 1
-                              bot=int(insche%layer(i+1))
-                              do u=top,bot
-                                 radius = r_earth - float(u)
-                                 coeff_vsv = coeff_vsv + this%ref3d_vsv(k,int(radius))
-                                 coeff_vsh = coeff_vsh + this%ref3d_vsh(k,int(radius))
-                                 nn = nn + 1.d0
-                              end do
-                              ref3d_vsv_agegrid(j,i) = coeff_vsv / nn
-                              ref3d_vsh_agegrid(j,i) = coeff_vsh / nn
-!                              ref3d_vs_agegrid(j,i) = dsqrt ( ( 2.d0 * ref3d_vsv_agegrid(j,i)**2 + &
-!                                   ref3d_vsh_agegrid(j,i)**2 ) / 3.d0)
-                              ref3d_vs_agegrid(j,i) = dsqrt (0.5 * ref3d_vsv_agegrid(j,i)**2 + &
-                                   0.5 * ref3d_vsh_agegrid(j,i)**2 )
+               open(fb,file=trim(age_file))
 
+               nlon=int(360.d0/age_incr)
+               nlat=int(180.d0/age_incr)
+
+               allocate(ages(nlon*nlat,3))
+               allocate(ages_use(nlon*nlat,3))
+               allocate(locent(nlon*nlat))
+               allocate(lacent(nlon*nlat))
+
+               allocate(ref3d_vsh_agegrid(nlon*nlat,inmesh%nlays))
+               allocate(ref3d_vsv_agegrid(nlon*nlat,inmesh%nlays))
+               allocate(ref3d_vs_agegrid(nlon*nlat,inmesh%nlays))
+
+               allocate(numper(inmesh%blocks_per_layer(1)))
+               allocate(indper(nlon*nlat))
+
+               do i=1,inmesh%nlays
+                  print*,"Setting up 1x1 degree reference model, layer:",i,nlon*nlat
+                  do j=1,nlon*nlat
+                     if (i.eq.1) read(unit=fb,fmt=*,iostat=ios) ages(j,:)
+                     nn = 0.d0
+                     coeff_vsv = 0.d0
+                     coeff_vsh = 0.d0
+                     lacent(j) = ages(j,2)-age_incr/2.d0
+                     locent(j) = ages(j,1)+age_incr/2.d0
+
+                     ! Uncomment in case you want to use a 3D reference model for your tests
+                     do k=1,this%npix
+                        if((lacent(j).ge.this%refmesh(k,4)).and.&
+                             (lacent(j).le.this%refmesh(k,3)).and.&
+                             (locent(j).le.this%refmesh(k,5)).and.&
+                             (locent(j).ge.this%refmesh(k,6))) then
+                           top=int(insche%layer(i))
+                           ! Exclude the water layer and shallow sediments
+                           if (top.lt.exclude) top = exclude
+                           if (top.eq.0) top = 1
+                           bot=int(insche%layer(i+1))
+                           do u=top,bot
+                              radius = r_earth - float(u)
+                              coeff_vsv = coeff_vsv + this%ref3d_vsv(k,int(radius))
+                              coeff_vsh = coeff_vsh + this%ref3d_vsh(k,int(radius))
+                              nn = nn + 1.d0
+                           end do
+                           ref3d_vsv_agegrid(j,i) = coeff_vsv / nn
+                           ref3d_vsh_agegrid(j,i) = coeff_vsh / nn
+                           ref3d_vs_agegrid(j,i) = dsqrt ( ( 2.d0 * ref3d_vsv_agegrid(j,i)**2 + &
+                                ref3d_vsh_agegrid(j,i)**2 ) / 3.d0)
+
+                           exit
+                        end if
+                     end do
+
+!                      ! Uncomment in case you want to use a 1D reference model for your tests
+!                      ref3d_vsh_agegrid(j,i) = this%get_model_coeff_aver_1d(insche%layer(i),insche%layer(i+1),&
+!                           1.d0,'vsh','prem_ani')
+!                      ref3d_vsv_agegrid(j,i) = this%get_model_coeff_aver_1d(insche%layer(i),insche%layer(i+1),&
+!                           1.d0,'vsv','prem_ani')
+!                      ref3d_vs_agegrid(j,i) = dsqrt ( ( 2.d0 * ref3d_vsv_agegrid(j,i)**2 + &
+!                           ref3d_vsh_agegrid(j,i)**2 ) / 3.d0)
+
+                     ! for each pixel, figure out which pixels in the 
+                     ! inversion grid they contribute to, only need to
+                     ! do this once for the first layer
+                     if (i.eq.1) then
+                        do l=1,inmesh%blocks_per_layer(1)
+                           if ((locent(j).ge.inmesh%xlomin(l,1)).and.&
+                                (locent(j).le.inmesh%xlomax(l,1)).and.&
+                                (lacent(j).ge.inmesh%xlamin(l,1)).and.&
+                                (lacent(j).le.inmesh%xlamax(l,1))) then
+                              numper(l)=numper(l)+1
+                              indper(j)=l                              
                               exit
                            end if
                         end do
+                     end if
+                  end do
+               end do
+               close(fb)
 
-                        ! ! Uncomment in case you want to use a 1D reference model for your tests
-                        ! ref3d_vsh_agegrid(j,i) = this%get_model_coeff_aver_1d(insche%layer(i),insche%layer(i+1),&
-                        !      1.d0,'vsh','prem_ani')
-                        ! ref3d_vsv_agegrid(j,i) = this%get_model_coeff_aver_1d(insche%layer(i),insche%layer(i+1),&
-                        !      1.d0,'vsv','prem_ani')
-                        ! ref3d_vs_agegrid(j,i) = dsqrt ( ( 2.d0 * ref3d_vsv_agegrid(j,i)**2 + &
-                        !      ref3d_vsh_agegrid(j,i)**2 ) / 3.d0)
+               ! read isotropic and continental xi background models
+               allocate(dlnvs(nlon*nlat,inmesh%nlays))
+               allocate(xayin(nlon*nlat,inmesh%nlays))
+               allocate(xiav_c(inmesh%nlays))
+               xiav_c=0
+               do i=1,inmesh%nlays
+                  print*,"Reading dln(vs) and Xi background model, layer:",i
+                  xiav_n=0.d0
+                  do j=1,nlon*nlat                                                       
+                     write(nlaychar,"(i2.2)") i
+                     open(fc,file=trim(iso_fold)//"/layer_"//nlaychar)
+                     open(fd,file=trim(ani_fold)//"/layer_"//nlaychar)                        
+                     read(unit=fc,fmt=*,iostat=ios) dummy,dummy,dlnvs_in
+                     read(unit=fd,fmt=*,iostat=ios) dummy,dummy,xayin(j,i)
+                     dlnvs(j,i)=dlnvs_in/100.d0
+                     if (int(ages(j,3)).eq.999) then
+                        xiav_n=xiav_n+1.d0
+                        xiav_c(i)=xiav_c(i)+xayin(j,i)
+                     end if
+                  end do
+                  xiav_c(i)=xiav_c(i)/xiav_n
+                  print*,xiav_c(i)
+               end do
+               close(fd)
+               close(fc)
 
+               if (trim(hypo_type).eq.'SQR') then                  
+                  ! find reference velocity for each point                               
+                  do z=1,zn ! loop over age dependent factors
+                     ffc=zs+zi*real(z-1)                     
+                     do x=1,xn ! loop over all xi amplitudes
+                        xx=xs+xi*real(x-1)                  
+                        do h=1,hn ! loop over flattening ages
+                           ffa=(hs+hi*real(h-1)) 
+                           this%modarr_tot=this%modarr_tot+1                         
+                           ! ----- here the model is actually created for each 1deg block
+                           print*,"Generating model, h=",hh," z=",zz," x=",xx
 
-                        ! for each pixel, figure out which pixels in the 
-                        ! inversion grid they contribute to, only need to
-                        ! do this once for the first layer
-                        if (i.eq.1) then
-                           do l=1,inmesh%blocks_per_layer(1)
-                              if ((locent(j).ge.inmesh%xlomin(l,1)).and.&
-                                  (locent(j).le.inmesh%xlomax(l,1)).and.&
-                                  (lacent(j).ge.inmesh%xlamin(l,1)).and.&
-                                  (lacent(j).le.inmesh%xlamax(l,1))) then
-                                 numper(l)=numper(l)+1
-                                 indper(j)=l                              
+                           ! reset model values at each new model
+                           valtot_dlnvsh=0.d0
+                           valtot_dlnvsv=0.d0
+                           valtot_xi=0.d0
+
+                           ! clip age file
+                           print*,"Age flat ",ffa
+                           do i=1,nlon*nlat
+                              if (int(ages(i,3)).ne.999) then
+                                 if (ages(i,3).ge.ffa) then
+                                    ages_use(i,3)=ffa
+                                 else
+                                    ages_use(i,3)=ages(i,3)
+                                 end if
+                              else
+                                 ages_use(i,3)=ages(i,3)
+                              end if
+                           end do
+                                                      
+                           star_depth = -250.d0
+                           incr_depth = 0.5d0
+                           zz = 0.d0
+                           ! loop to find starting depth
+                           do i=1,1000
+                              star_depth = star_depth + incr_depth
+                              ! compute average depth
+                              mean_depth = 0.d0
+                              numb_depth = 0.d0
+                              do j=1,nlon*nlat
+                                 if (int(ages(j,3)).ne.999) then
+                                    mean_depth=mean_depth+star_depth+ffc*sqrt(ages_use(j,3))
+                                    numb_depth=numb_depth+1.d0
+                                 end if
+                              end do
+                              mean_depth = mean_depth/numb_depth
+                              if ((floor(mean_depth*2.d0)/2.d0)&
+                                   .eq.nominal_depth) then
                                  exit
                               end if
                            end do
-                        end if
+                           print*,"Found starting depth:",star_depth,ffc
+ 
+                           do i=1,inmesh%nlays
+                              depth=insche%layer(i)+abs(insche%layer(i)-insche%layer(i+1))/2.d0                          
+                              do j=1,nlon*nlat                               
+
+                                 if (int(ages(j,3)).eq.999) then
+                                    xay=xiav_c(i) !xayin(j,i)
+                                 else                         
+                                    zz=star_depth+ffc*sqrt(ages_use(j,3))                                 
+                                    hh=nominal_thick/2.35482 
+                                    xay=1.d0+xx*exp(-(depth-zz)**2/(2*hh**2));                                    
+                                 end if
+                              
+                                 ! reparameterize from dlnvs and xi to vsh and vsv
+                                 vsv=dsqrt((2.d0*(dlnvs(j,i)*ref3d_vs_agegrid(j,i)+&
+                                      ref3d_vs_agegrid(j,i))**2)/(xay+1.d0))
+                                 vsh=dsqrt((2.d0*(dlnvs(j,i)*ref3d_vs_agegrid(j,i)+&
+                                      ref3d_vs_agegrid(j,i))**2)/(xay**(-1)+1.d0))
+                                 dlnvsh=(vsh-ref3d_vsh_agegrid(j,i))/&
+                                      ref3d_vsh_agegrid(j,i) ! this is what i write out
+                                 dlnvsv=(vsv-ref3d_vsv_agegrid(j,i))/&
+                                      ref3d_vsv_agegrid(j,i) ! this is what i write out
+
+                                 valtot_dlnvsh(indper(j),i)=valtot_dlnvsh(indper(j),i)+dlnvsh
+                                 valtot_dlnvsv(indper(j),i)=valtot_dlnvsv(indper(j),i)+dlnvsv
+                                 valtot_xi(indper(j),i)=valtot_xi(indper(j),i)+xay
+                              
+                              end do
+                           end do
+
+                           ! arithmetic average of values
+                           do i=1,inmesh%nlays                              
+                              do j=1,inmesh%blocks_per_layer(i) 
+                                 valtot_dlnvsh(j,i)=valtot_dlnvsh(j,i)/real(numper(j))
+                                 valtot_dlnvsv(j,i)=valtot_dlnvsv(j,i)/real(numper(j))
+                                 valtot_xi(j,i)=valtot_xi(j,i)/real(numper(j))                                 
+                              end do
+                           end do
+
+                           ! write models to be tested to disk
+                           fname=trim(out_fold)//"/model.a"//trim(int2str(h))&
+                                //".x"//trim(int2str(x))&
+                                //".c"//trim(int2str(z))
+                           this%modarr_path(this%modarr_tot)=trim(fname)//".pcn"
+                           open(fg,file=trim(fname)//".pcn",iostat=ios)
+                           open(fx,file=trim(fname)//".xi",iostat=ios)
+                           write(fg,*) "VOXEL"
+                           i=0
+                           do j=1,inmesh%nlays
+                              do k=1,inmesh%blocks_per_layer(j)
+                                 i=i+1
+                                 write(fg,"(1x,i8,2e15.7)") i,valtot_dlnvsh(k,j)*100.d0      
+                                 write(fx,"(1x,i8,2e15.7)") i,valtot_xi(k,j)
+                              enddo
+                           enddo
+                           do j=1,inmesh%nlays
+                              do k=1,inmesh%blocks_per_layer(j)
+                                 i=i+1
+                                 write(fg,"(1x,i8,2e15.7)") i,valtot_dlnvsv(k,j)*100.d0
+                              enddo
+                           enddo
+                           close(fg)
+                           close(fx)
+                        end do
                      end do
                   end do
-                  close(fb)
                   
-                  ! read isotropic and continental xi background models
-                  allocate(dlnvs(nlon*nlat,inmesh%nlays))
-                  allocate(xayin(nlon*nlat,inmesh%nlays))
-                  do i=1,inmesh%nlays
-                     print*,"Reading dln(vs) and Xi background model, layer:",i
-                     do j=1,nlon*nlat                                                       
-                        write(nlaychar,"(i2.2)") i
-                        open(fc,file=trim(iso_fold)//"/layer_"//nlaychar)
-                        open(fd,file=trim(ani_fold)//"/layer_"//nlaychar)                        
-                        read(unit=fc,fmt=*,iostat=ios) dummy,dummy,dlnvs_in
-                        read(unit=fd,fmt=*,iostat=ios) dummy,dummy,xayin(j,i)
-                        dlnvs(j,i)=dlnvs_in/100.d0
-                     end do
+                  ! store model_array.in file
+                  open(ga,file=trim(out_fold)//"/model_array.in",iostat=ios)                  
+                  write(ga,*) this%modarr_tot
+                  do i=1,this%modarr_tot
+                     write(ga,*) '"'//trim(this%modarr_path(i))//'"'
                   end do
-                  close(fd)
-                  close(fc)
+                  close(ga)
                   
+               ! layer vs sqrt-of-age case   
+               else if (trim(hypo_type).eq.'LAY') then
                   ! find reference velocity for each point                               
                   do h=1,hn ! loop over all half-width thicknesses
                      hh=(hs+hi*real(h-1))/2.35482 
@@ -2486,7 +2625,7 @@
                               do j=1,nlon*nlat                               
 
                                  if (int(ages(j,3)).eq.999) then
-                                    xay=xayin(j,i)
+                                    xay=xiav_c(i) !xayin(j,i)
                                  else                         
                                     xay=1.d0+xx*exp(-(depth-zz)**2/(2*hh**2));
                                  end if
@@ -2553,17 +2692,12 @@
                      write(ga,*) '"'//trim(this%modarr_path(i))//'"'
                   end do
                   close(ga)
-                  
-                  ! layer vs sqrt-of-age case   
-               else if (trim(hypo_type).eq.'SQR') then
-                  print*,"Not yet implemented"
-                  stop
                else
                   print*,"Incorrect hypo_type"
                   stop                
                end if
 
-               deallocate(locent,lacent,ages,ref3d_vs_agegrid,ref3d_vsh_agegrid,&
+               deallocate(locent,lacent,ages,ages_use,ref3d_vs_agegrid,ref3d_vsh_agegrid,&
                     ref3d_vsv_agegrid,valtot_xi,valtot_dlnvsh,valtot_dlnvsv,numper,&
                     indper,dlnvs,xayin)              
 
