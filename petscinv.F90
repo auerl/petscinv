@@ -316,6 +316,7 @@
              end if
              call this%read_mesh(inopts%grdin)
 
+
           case (.false.)
              ! Generate a new grid based on eqincr
              call PetscPrintf(PETSC_COMM_WORLD,&
@@ -351,37 +352,46 @@
 
           PetscChar(256)  grdin          
           PetscChar(5)    dummy
-          PetscInt        i,j
+
+          PetscInt        i,j,ios
+          PetscInt        lev1,lev2
 
 
-          open(10,file=trim(grdin))           ! read levels of blocks
-          open(20,file=trim(grdin)//".sh")    ! read coordinate range
-          open(30,file=trim(grdin)//".lay")   ! read blocks per layer
+          PetscInt, parameter :: fz1=77,fz2=88,fz3=99 ! file handler
+
+          ios = 0
+          open(unit=fz1,file=trim(grdin),iostat=ios)
+          open(unit=fz2,file=trim(grdin)//".sh",iostat=ios)
+          open(unit=fz3,file=trim(grdin)//".lay",iostat=ios)
 
           ! Read a stored grid from disk
           do i = 1,this%nlays
-             read(30,*), this%blocks_per_layer(i)
+             read(fz3,fmt=*), this%blocks_per_layer(i)
              this%blocks_per_param = this%blocks_per_param + &
                                     this%blocks_per_layer(i)
 
-             do j = 1,this%blocks_per_layer(i)
-                read(10,*),dummy,this%levels(j,i)
-                read(20,*),dummy,this%xlamin(j,i),&
-                                    this%xlamax(j,i),&
-                                    this%xlomin(j,i),&
-                                    this%xlomax(j,i)
+
+
+             do j = 1,this%blocks_per_layer(i)                
+                this%levels(j,i)=1
+                read(fz1, fmt=*, iostat=ios) this%levels(j,i)
+                read(fz2,fmt=*),dummy,this%xlamin(j,i),&
+                                 this%xlamax(j,i),&
+                                 this%xlomin(j,i),&
+                                 this%xlomax(j,i)
 
                 ! Compute center lat and lon
                 this%lacent(j,i)=abs((this%xlamax(j,i)-&
                      this%xlamin(j,i))/2) + this%xlamin(j,i)
                 this%locent(j,i)=abs((this%xlomax(j,i)-&
                      this%xlomin(j,i))/2) + this%xlomin(j,i)                
+                
              end do
           end do
              
-          close(10)
-          close(20)
-          close(30)
+          close(fz1)
+          close(fz2)
+          close(fz3)
 
           call PetscPrintf(PETSC_COMM_WORLD,&
                "MESHER: Mesh read successfully!\n",ierr)
@@ -478,7 +488,7 @@
                 ! Compute center lat and lon
                 this%lacent(j,i) = coords(5)
                 this%locent(j,i) = coords(6)
-                
+
              end do
              this%blocks_per_param = this%blocks_per_param + &
                   this%blocks_per_layer(i)
