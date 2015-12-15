@@ -67,7 +67,7 @@
         integer, parameter :: nlmax = 288          ! maximum number of latitude zones       
         integer, parameter :: matmx = 500          ! maximal number of matrices to read
         integer, parameter :: dmpmx = 500          ! maximal number of damping loops
-        integer, parameter :: nprmx = 10000        ! maximal number per row for temporary arrays
+        integer, parameter :: nprmx = 100000       ! maximal number per row for temporary arrays
         integer, parameter :: datmx = 5*(10**6)    ! maximal number of data per submatrix
         integer, parameter :: nperd = 30           ! maximal number of nonz in damping row
 
@@ -897,6 +897,10 @@
                 row_glob=row_glob+1
                 read(70,*) pnt(j)
                 this%prealloc(row_glob) = pnt(j)-pnt(j-1) 
+                if (this%prealloc(row_glob).gt.nprmx) then
+                   print*,"PREALLOC CRASHED: nprmx too small"
+                   stop
+                end if
              end do
              deallocate ( pnt )
              close(70)
@@ -1629,7 +1633,6 @@
 
                ! Second loop over measurements, insert row by row
                do i=1,int(insche%meta_info(j,4))
-               
 
                   ! Check if current proc owns this row
                   if (((this%row).ge.this%row_start).and.&
@@ -1644,10 +1647,10 @@
                      l=0
                      do k=pnt_in(i-1)+1,pnt_in(i)
                         l=l+1
-                        read(30,rec=k) val_in(l) ! 
+                        read(30,rec=k) val_in(l) !                         
                         read(40,rec=k) ind_in(l) ! 
                      end do
-
+                     
                      ! estimate weights, from lapos code
                      absttime = abs(rhs_in(i))
                      cut_weight = 1.
@@ -1657,23 +1660,23 @@
                      if ( absttime < insche%meta_info(j,3) ) then
                         cut_weight = exp(-insche%meta_info(j,3) + absttime )
                      end if
-                  
+
                      ! Set rhs vector
                      weight = insche%meta_info(j,1) * cut_weight
                      rhs_petsc      = dble ( rhs_in(i) )   * weight
                      val_petsc(1:l) = dble ( val_in(1:l) ) * weight
                      ind_petsc(1:l) = ind_in(1:l) - 1 ! PETSc index starts at 0
 
-
                      ! Set one row at a time, in case this row is locally owned
                      call MatSetValues ( this%A, 1, this%row, l, ind_petsc(1:l), &
                                          val_petsc(1:l), INSERT_VALUES, ierr)
-                                     
+                                    
+ 
                      ! Set values in parallel vector
                      call VecSetValue  ( this%b, this%row, rhs_petsc, INSERT_VALUES, ierr )
                      call VecSetValue  ( this%mask_dmp, this%row, 1.d0, INSERT_VALUES, ierr )
                      call VecSetValue  ( this%mask_dat, this%row, 0.d0, INSERT_VALUES, ierr )
-                     
+
                      if (verbosity > 1) then
                         if (mod(int(this%row),int(real(this%row_end)/100.)).eq.0) then
                            print*,"Proc ",this%processor, " read", &
@@ -1681,8 +1684,8 @@
                         end if
                      end if
 
-                     close(30)
                      close(40)
+                     close(30)
 
                   end if ! end if check ownership
 
@@ -1690,9 +1693,12 @@
                   this%row = this%row + 1 
 
                end do
+               
 
                ! Submatrix 
                insche%fromto_info(j,2) = this%row - 1
+               
+               print*,"done insche"
 
                call PetscPrintf(PETSC_COMM_WORLD,"MATRIX: Read submatrix "//&
                                  trim(insche%path_info(j,3))//"\n",ierr)
