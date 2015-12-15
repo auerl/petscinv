@@ -1691,14 +1691,10 @@
 
                   ! Global row index, PETSc uses 0-based indices
                   this%row = this%row + 1 
-
                end do
                
-
                ! Submatrix 
                insche%fromto_info(j,2) = this%row - 1
-               
-               print*,"done insche"
 
                call PetscPrintf(PETSC_COMM_WORLD,"MATRIX: Read submatrix "//&
                                  trim(insche%path_info(j,3))//"\n",ierr)
