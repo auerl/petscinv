@@ -65,7 +65,7 @@
         integer, parameter :: n1max = n0max*nlaym  ! maximum number of blocks per param
         integer, parameter :: npmax = 4            ! maximum number of physical params
         integer, parameter :: nlmax = 288          ! maximum number of latitude zones       
-        integer, parameter :: matmx = 500          ! maximal number of matrices to read
+        integer, parameter :: matmx = 3000         ! maximal number of matrices to read
         integer, parameter :: dmpmx = 500          ! maximal number of damping loops
         integer, parameter :: nprmx = 100000       ! maximal number per row for temporary arrays
         integer, parameter :: datmx = 5*(10**6)    ! maximal number of data per submatrix
